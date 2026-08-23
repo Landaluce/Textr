@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.vscode/
+
+# Runtime user data (contains personal info)
+config.json
+snippets.json
+
+# Logs and scratch files
+my_logs.log
+nohup.out
+somefile
