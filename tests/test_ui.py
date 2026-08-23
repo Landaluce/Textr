@@ -38,6 +38,10 @@ class TestTrayToggle:
 
 
 class TestStateSync:
+    def test_buttons_carry_qss_hook_names(self, window):
+        assert window.toggle_daemon_btn.objectName() == "toggle_daemon_btn"
+        assert window.toggle_writing_btn.objectName() == "toggle_writing_btn"
+
     def test_poll_syncs_stale_button_tray_and_label(self, window, d):
         d.enabled = False  # changed outside the UI, e.g. hotkey
         assert window.toggle_daemon_btn.isChecked() is True  # stale
