@@ -306,11 +306,13 @@ class TexterUI(QMainWindow):
         action_layout = QHBoxLayout()
 
         self.toggle_daemon_btn = QPushButton("Daemon")
+        self.toggle_daemon_btn.setObjectName("toggle_daemon_btn")
         self.toggle_daemon_btn.setCheckable(True)
         self.toggle_daemon_btn.setChecked(self.daemon.enabled if self.daemon else True)
         self.toggle_daemon_btn.toggled.connect(self.toggle_daemon)
 
         self.toggle_writing_btn = QPushButton("Writing Mode")
+        self.toggle_writing_btn.setObjectName("toggle_writing_btn")
         self.toggle_writing_btn.setCheckable(True)
         self.toggle_writing_btn.setChecked(self.daemon.writing_mode if self.daemon else False)
         self.toggle_writing_btn.toggled.connect(self.toggle_writing_mode)
