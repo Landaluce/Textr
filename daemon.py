@@ -235,6 +235,8 @@ class Daemon:
             "email": self.config.get("email", "alvaro@example.com"),
             "date": datetime.now().strftime("%Y-%m-%d"),
             "time": datetime.now().strftime("%H:%M"),
+            "iso": datetime.now().isoformat(timespec="seconds"),
+            "week": datetime.now().strftime("%V"),
         }
 
     def render_template(self, text):
