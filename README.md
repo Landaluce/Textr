@@ -6,7 +6,7 @@ Text expansion for Linux (X11). Type a short trigger anywhere and Textr expands 
 
 - **Global trigger detection** — works in any application via a background keyboard daemon
 - **Three snippet types** — static text (`variable`), per-language code (`template`), and actions (`command`)
-- **Two insertion modes** — fast clipboard paste (default) or human-like typing ("Writing Mode")
+- **Two insertion modes** — fast clipboard paste (default) or human-like typing ("Human Typing")
 - **Word-boundary matching** — triggers only fire after whitespace/punctuation, never mid-word
 - **Template variables** — `{name}`, `{email}`, `{date}`, `{time}`, `{clipboard}`
 - **Global hotkey** — `Ctrl+Shift+P` toggles pause/resume
