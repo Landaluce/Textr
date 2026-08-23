@@ -1,6 +1,6 @@
 # Textr
 
-Text expansion for Linux (X11). Type a short trigger anywhere and Texter expands it into full text, code templates, or actions — with a PySide6 GUI for managing everything from the system tray.
+Text expansion for Linux (X11). Type a short trigger anywhere and Textr expands it into full text, code templates, or actions — with a PySide6 GUI for managing snippets and settings.
 
 ## Features
 
@@ -9,7 +9,6 @@ Text expansion for Linux (X11). Type a short trigger anywhere and Texter expands
 - **Two insertion modes** — fast clipboard paste (default) or human-like typing ("Writing Mode")
 - **Word-boundary matching** — triggers only fire after whitespace/punctuation, never mid-word
 - **Template variables** — `{name}`, `{email}`, `{date}`, `{time}`, `{clipboard}`
-- **System tray integration** — pause/resume, show manager, quit
 - **Global hotkey** — `Ctrl+Shift+P` toggles pause/resume
 - **Crash resilience** — the keyboard listener survives internal errors and restarts automatically instead of silently dying
 
@@ -36,7 +35,7 @@ python3 -m pip install -r requirements.txt
 bash run.sh          # or: python3 main.py
 ```
 
-This starts both the UI window and the background daemon. Minimize to the tray; triggers keep working while the window is hidden.
+This starts both the UI window and the background daemon. Close or hide the window; triggers keep working while it is hidden.
 
 ### Snippet types
 
@@ -106,6 +105,6 @@ Threading rules that keep the daemon alive:
 
 ## Troubleshooting
 
-- **Triggers not expanding** — check the tray icon state (red = paused); `Ctrl+Shift+P` toggles pause.
+- **Triggers not expanding** — the daemon may be paused: press `Ctrl+Shift+P` once, or check the Daemon button/status label in the Texter window.
 - **Paste does nothing in a terminal** — some terminals expect a different paste shortcut than `Ctrl+Shift+V`.
 - **Listener errors** — the daemon logs exceptions to the terminal and keeps running; if you see repeated `exception in key handler` tracebacks, check recently edited snippets for missing fields.
