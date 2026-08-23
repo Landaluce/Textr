@@ -170,7 +170,7 @@ class TexterUI(QMainWindow):
             self.toggle_writing_btn.setChecked(self.daemon.writing_mode)
             self.status_label.setText(
                 "Status: Daemon: " + ("enabled" if self.daemon.enabled else "paused") +
-                ", Writing mode: " + ("ON" if self.daemon.writing_mode else "OFF")
+                ", Human Typing: " + ("ON" if self.daemon.writing_mode else "OFF")
             )
             self.toggle_writing_btn.blockSignals(False)
 
@@ -299,7 +299,7 @@ class TexterUI(QMainWindow):
         right_layout.addWidget(settings_group)
 
         # Status
-        self.status_label = QLabel("Status: Ready, Daemon: enabled, Writing Mode: OFF")
+        self.status_label = QLabel("Status: Ready, Daemon: enabled, Human Typing: OFF")
         right_layout.addWidget(self.status_label)
 
         # Buttons
@@ -311,7 +311,7 @@ class TexterUI(QMainWindow):
         self.toggle_daemon_btn.setChecked(self.daemon.enabled if self.daemon else True)
         self.toggle_daemon_btn.toggled.connect(self.toggle_daemon)
 
-        self.toggle_writing_btn = QPushButton("Writing Mode")
+        self.toggle_writing_btn = QPushButton("Human Typing")
         self.toggle_writing_btn.setObjectName("toggle_writing_btn")
         self.toggle_writing_btn.setCheckable(True)
         self.toggle_writing_btn.setChecked(self.daemon.writing_mode if self.daemon else False)
@@ -551,7 +551,7 @@ class TexterUI(QMainWindow):
         self.tray_icon.setToolTip(f"Texter - {status.capitalize()}")
 
         writing = self.daemon.writing_mode if self.daemon else False
-        self.status_label.setText(f"Status: Daemon: {status}, Writing Mode: {writing}")
+        self.status_label.setText(f"Status: Daemon: {status}, Human Typing: {writing}")
         print(f"UI: Daemon {status}")
 
     def toggle_pause(self):
@@ -573,9 +573,9 @@ class TexterUI(QMainWindow):
             self.daemon.writing_mode = checked
             self.status_label.setText(
                 f"Status: Daemon: {'enabled' if self.daemon.enabled else 'paused'}, "
-                f"Writing mode: {'ON' if checked else 'OFF'}"
+                f"Human Typing: {'ON' if checked else 'OFF'}"
             )
-            print(f"UI: Writing mode {'enabled' if checked else 'disabled'}")
+            print(f"UI: Human typing {'enabled' if checked else 'disabled'}")
 
     def quit_button(self):
         """Button handler for manual quit"""

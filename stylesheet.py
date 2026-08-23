@@ -50,18 +50,16 @@ dark_stylesheet = """
     QPushButton:pressed {
         background-color: #313244;
     }
-    /* State-colored toggles: Daemon = green when enabled / red when paused,
-       Writing Mode = mauve accent while active */
-    QPushButton#toggle_daemon_btn:!checked {
+    /* State-colored toggles (green when active, red when inactive):
+       Daemon button and Human Typing button */
+    QPushButton#toggle_daemon_btn:!checked,
+    QPushButton#toggle_writing_btn:!checked {
         background-color: #f38ba8;
         color: #11111b;
     }
-    QPushButton#toggle_daemon_btn:checked {
-        background-color: #a6e3a1;
-        color: #11111b;
-    }
+    QPushButton#toggle_daemon_btn:checked,
     QPushButton#toggle_writing_btn:checked {
-        background-color: #cba6f7;
+        background-color: #a6e3a1;
         color: #11111b;
     }
     QListWidget::item {
