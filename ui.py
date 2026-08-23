@@ -170,7 +170,7 @@ class TexterUI(QMainWindow):
             self.toggle_writing_btn.setChecked(self.daemon.writing_mode)
             self.status_label.setText(
                 "Status: Daemon: " + ("enabled" if self.daemon.enabled else "paused") +
-                ", Human Typing: " + ("ON" if self.daemon.writing_mode else "OFF")
+                ", Human Typing: " + ("enabled" if self.daemon.writing_mode else "disabled")
             )
             self.toggle_writing_btn.blockSignals(False)
 
@@ -299,7 +299,7 @@ class TexterUI(QMainWindow):
         right_layout.addWidget(settings_group)
 
         # Status
-        self.status_label = QLabel("Status: Ready, Daemon: enabled, Human Typing: OFF")
+        self.status_label = QLabel("Status: Ready, Daemon: enabled, Human Typing: disabled")
         right_layout.addWidget(self.status_label)
 
         # Buttons
@@ -573,7 +573,7 @@ class TexterUI(QMainWindow):
             self.daemon.writing_mode = checked
             self.status_label.setText(
                 f"Status: Daemon: {'enabled' if self.daemon.enabled else 'paused'}, "
-                f"Human Typing: {'ON' if checked else 'OFF'}"
+                f"Human Typing: {'enabled' if checked else 'disabled'}"
             )
             print(f"UI: Human typing {'enabled' if checked else 'disabled'}")
 
