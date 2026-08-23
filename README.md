@@ -43,7 +43,7 @@ This starts both the UI window and the background daemon. Close or hide the wind
 | ------ | ---------- |
 | `variable` | Expands to static text, e.g. trigger `sig` → your signature |
 | `template` | Expands to language-specific code chosen by the current language selector |
-| `command`  | Performs an action (no text inserted), e.g. `:d` inserts today's date |
+| `command` | Performs an action (no text inserted), e.g. `:d` inserts today's date |
 
 Snippet JSON structure:
 
@@ -63,7 +63,7 @@ Templates use `{"python": "...", "javascript": "..."}` under `"languages"` and s
 Commands are just snippets of type `command` with an `action` field:
 
 | Action | Effect |
-|--------|--------|
+| -------- | -------- |
 | `toggle_pause` / `resume` | Pause or resume expansion |
 | `set_language` | Switch the template language (`value` holds the language) |
 | `date` / `time` / `datetime` | Insert the current date/time |
@@ -91,7 +91,7 @@ The test suite exercises the daemon without X11: the keyboard controller, clipbo
 
 ### Architecture
 
-```
+```text
 main.py ── starts ──> TexterUI (Qt GUI thread)
                   └─> Daemon.run() on a worker thread
                         ├─ pynput Listener  -> on_press -> buffer + trigger match
