@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 from types import SimpleNamespace
 
@@ -167,3 +168,16 @@ class TestDefensiveLookup:
     def test_template_without_languages_returns_none(self, d):
         d.add_or_update_snippet("nolangs", {"type": "template"})
         assert d.is_valid_trigger("nolangs") is None
+
+
+class TestContextVars:
+    def test_iso_renders_as_iso8601(self, d):
+        rendered = d.render_template("{iso}")
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$", rendered)
+
+    def test_week_renders_as_number(self, d):
+        rendered = d.render_template("wk {week}")
+        assert re.match(r"^wk \d{1,2}$", rendered)
+
+    def test_unknown_var_left_untouched(self, d):
+        assert d.render_template("{nope}") == "{nope}"
