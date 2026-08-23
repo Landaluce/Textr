@@ -203,14 +203,9 @@ class TexterUI(QMainWindow):
         if not self.daemon:
             return
         if self.daemon.enabled != self.last_enabled_state:
-            self.last_enabled_state = self.daemon.enabled
-            status = "enabled" if self.daemon.enabled else "paused"
-            self.status_label.setText(f"Status: Daemon: {status}, Writing Mode: {self.daemon.writing_mode}")
-            
-            # Update tray icon and tooltip
-            color = "green" if self.daemon.enabled else "red"
-            self.tray_icon.setIcon(create_status_icon(color))
-            self.tray_icon.setToolTip(f"Texter - {status.capitalize()}")
+            # State changed outside the UI (hotkey or command snippet):
+            # resync button, tray icon, and status label.
+            self.set_daemon_enabled(self.daemon.enabled)
 
         # Check if language changed in daemon (e.g., via slj or slp commands)
         current_lang = self.language_combo.currentText()
@@ -346,7 +341,7 @@ class TexterUI(QMainWindow):
         # Tray context menu
         tray_menu = QMenu()
         self.toggle_action = QAction("Toggle Pause", self)
-        self.toggle_action.triggered.connect(self.toggle_daemon)
+        self.toggle_action.triggered.connect(self.toggle_pause)
         tray_menu.addAction(self.toggle_action)
         
         show_action = QAction("Show Manager", self)
@@ -535,12 +530,41 @@ class TexterUI(QMainWindow):
             self.refresh_snippet_list()
             self.status_label.setText(f"Status: Deleted snippet '{trigger}' (saved)")
 
-    def toggle_daemon(self, checked):
+    def set_daemon_enabled(self, enabled):
+        """Central pause/resume: update daemon state and every UI reflection.
+
+        Always use this instead of setting daemon.enabled directly, so the
+        Daemon button, tray icon, tooltip, and status label stay in sync no
+        matter which entry point (button, tray menu, hotkey) changed state."""
         if self.daemon:
-            self.daemon.enabled = checked
-            status = "enabled" if checked else "paused"
-            self.status_label.setText(f"Status: Daemon: {status}")
-            print(f"UI: Daemon {status}")
+            self.daemon.enabled = enabled
+        self.last_enabled_state = enabled
+        status = "enabled" if enabled else "paused"
+
+        self.toggle_daemon_btn.blockSignals(True)
+        self.toggle_daemon_btn.setChecked(enabled)
+        self.toggle_daemon_btn.blockSignals(False)
+
+        self.tray_icon.setIcon(create_status_icon("green" if enabled else "red"))
+        self.tray_icon.setToolTip(f"Texter - {status.capitalize()}")
+
+        writing = self.daemon.writing_mode if self.daemon else False
+        self.status_label.setText(f"Status: Daemon: {status}, Writing Mode: {writing}")
+        print(f"UI: Daemon {status}")
+
+    def toggle_pause(self):
+        """Tray 'Toggle Pause' action: flip the current daemon state.
+
+        QAction.triggered passes checked=False for non-checkable actions,
+        so this must not reuse toggle_daemon(checked) — it would always
+        pause and never resume."""
+        if self.daemon:
+            self.set_daemon_enabled(not self.daemon.enabled)
+
+    def toggle_daemon(self, checked):
+        if not self.daemon:
+            return
+        self.set_daemon_enabled(bool(checked))
 
     def toggle_writing_mode(self, checked):
         if self.daemon:
