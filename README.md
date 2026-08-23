@@ -1,4 +1,4 @@
-# Texter
+# Textr
 
 Text expansion for Linux (X11). Type a short trigger anywhere and Texter expands it into full text, code templates, or actions — with a PySide6 GUI for managing everything from the system tray.
 
