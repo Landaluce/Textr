@@ -18,7 +18,7 @@ Text expansion for Linux (X11). Type a short trigger anywhere and Texter expands
 - Linux with X11 (Wayland is not supported by the keyboard backend)
 - Python 3.9+
 
-```
+```txt
 PySide6>=6.6
 pynput>=1.7
 pyperclip>=1.9
@@ -41,7 +41,7 @@ This starts both the UI window and the background daemon. Minimize to the tray; 
 ### Snippet types
 
 | Type | Behavior |
-|------|----------|
+| ------ | ---------- |
 | `variable` | Expands to static text, e.g. trigger `sig` → your signature |
 | `template` | Expands to language-specific code chosen by the current language selector |
 | `command`  | Performs an action (no text inserted), e.g. `:d` inserts today's date |
