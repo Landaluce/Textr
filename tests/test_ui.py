@@ -539,6 +539,33 @@ class TestImportConflicts:
         assert "trigger" not in d.snippets["a1"]
 
 
+class TestDialogCommandValue:
+    def test_set_language_value_preserved_on_edit(self, qapp):
+        dialog = AddSnippetDialog(None, snippet={
+            "trigger": "sljs", "type": "command", "action": "set_language",
+            "value": "javascript", "category": "programming",
+        })
+        assert dialog.action_input.text() == "set_language"
+        assert dialog.command_value_input.text() == "javascript"
+        snippet = dialog.get_snippet()
+        assert snippet["action"] == "set_language"
+        assert snippet["value"] == "javascript"
+
+    def test_command_without_value_omits_field(self, qapp):
+        dialog = AddSnippetDialog(None, snippet={
+            "trigger": ":p", "type": "command", "action": "toggle_pause",
+        })
+        snippet = dialog.get_snippet()
+        assert snippet["action"] == "toggle_pause"
+        assert "value" not in snippet
+
+    def test_value_input_hidden_for_non_commands(self, qapp):
+        dialog = AddSnippetDialog(None)
+        assert dialog.command_value_input.isHidden() is True
+        dialog.type_combo.setCurrentText("command")
+        assert dialog.command_value_input.isHidden() is False
+
+
 class TestDialogEnabledFlag:
     def test_new_snippet_defaults_to_enabled(self, qapp):
         dialog = AddSnippetDialog(None)
