@@ -347,10 +347,15 @@ class TestHighlightClipping:
         from stylesheet import dark_stylesheet
         # ::item rules make the style engine stretch highlights across the
         # whole row (gutter included); the delegate owns those panels now.
-        assert "QTreeWidget::item" not in dark_stylesheet
+        rules = [
+            line.strip() for line in dark_stylesheet.splitlines()
+            if line.strip().startswith("QTreeWidget::item") and line.strip().endswith("{")
+        ]
+        assert rules == []
         # selection colors on the tree would map to the palette highlight the
-        # view paints full-row below the delegate.
-        assert dark_stylesheet.count("selection-background-color") == 1
+        # view paints full-row below the delegate. (Property form with ':' so
+        # comments mentioning it don't count.)
+        assert dark_stylesheet.count("selection-background-color:") == 1
 
 
 class TestEditSnippet:
