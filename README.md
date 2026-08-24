@@ -12,6 +12,9 @@ Text expansion for Linux (X11 and Wayland). Type a short trigger anywhere and Te
 - **Grouped snippet manager** — group snippets by category (with `python/web`-style nested folders), by type, or by tag; optionally add a second "then by" level inside each group (e.g. category → type); search filters as you type; sort by name, recently used, or most used
 - **Tags & usage tracking** — snippets carry multiple comma-separated tags, and the daemon records how often and when each snippet expands
 - **Template variables** — `{name}`, `{email}`, `{date}`, `{time}`, `{iso}`, `{week}`, `{clipboard}`, plus `{cursor}` to leave the caret mid-expansion
+- **Per-snippet enable/disable** — turn a snippet off (edit → uncheck **Enabled**) without deleting it; disabled snippets are dimmed in the tree and never expand
+- **Configurable date/time formats** — set the strftime patterns for `{date}`/`{time}` (and `:d`/`:time`/`:datetime`) in the profile settings, e.g. `%d/%m/%Y` for day-first dates
+- **Safe import** — importing a JSON file warns about triggers it will overwrite before applying
 - **Global hotkey** — `Ctrl+Shift+P` toggles pause/resume
 - **Crash resilience** — the keyboard listener survives internal errors and restarts automatically instead of silently dying
 
@@ -77,7 +80,7 @@ Snippet JSON structure:
 }
 ```
 
-`tags` is optional (a snippet can appear under several groups); snippets loaded from older files without `tags` default to their `category`. The daemon also records `usage` (count) and `last_used` (ISO timestamp) on every expansion for the recently/most-used sorting.
+`tags` is optional (a snippet can appear under several groups); snippets loaded from older files without `tags` default to their `category`. The daemon also records `usage` (count) and `last_used` (ISO timestamp) on every expansion for the recently/most-used sorting. `"enabled": false` disables a snippet without deleting it (defaults to enabled when absent).
 
 Templates use `{"python": "...", "javascript": "..."}` under `"languages"` and support the same `{variable}` substitution.
 
@@ -105,7 +108,7 @@ Data files are looked up in this order:
 2. a file already present next to the working directory (legacy source-tree layout)
 3. `$XDG_CONFIG_HOME/textr/` (defaults to `~/.config/textr/`), created on demand
 
-- `config.json` — user profile (`name`, `email`, `layout`, `language`, `paste_hotkey`)
+- `config.json` — user profile (`name`, `email`, `layout`, `language`, `paste_hotkey`, `date_format`, `time_format`)
 - `snippets.json` — all snippet definitions
 
 The paste shortcut used in clipboard mode defaults to `Ctrl+Shift+V` and is configurable

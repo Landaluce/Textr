@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QFileDialog
 
 from ui import AddSnippetDialog, TexterUI
 
@@ -286,9 +286,13 @@ class TestToggleButtonText:
         assert window.toggle_writing_btn.text() == "Human Typing: On"
         assert window.toggle_writing_btn.isChecked() is True
 
-    def test_status_label_uses_words_not_bools(self, window, d):
+    def test_status_label_does_not_duplicate_button_state(self, window, d):
+        # The buttons carry the state now; the label is for transient messages.
         window.set_daemon_enabled(False)
-        assert "Human Typing: disabled" in window.status_label.text()
+        assert "Daemon:" not in window.status_label.text()
+        assert "Human Typing" not in window.status_label.text()
+        assert window.toggle_daemon_btn.text() == "Daemon: Off"
+        assert window.toggle_writing_btn.text() == "Human Typing: Off"
 
 
 class TestSelectionPreserved:
@@ -393,6 +397,107 @@ class TestPasteHotkeySetting:
         assert d.config["paste_hotkey"] == "ctrl+shift+v"
 
 
+class TestDateFormatSetting:
+    def test_fields_default_to_config(self, window, d):
+        assert window.date_format_edit.text() == "%Y-%m-%d"
+        assert window.time_format_edit.text() == "%H:%M"
+
+    def test_save_settings_persists_formats(self, window, d):
+        window.date_format_edit.setText("%d/%m/%Y")
+        window.time_format_edit.setText("%H:%M:%S")
+        window.save_user_config()
+        assert d.config["date_format"] == "%d/%m/%Y"
+        assert d.config["time_format"] == "%H:%M:%S"
+
+    def test_blank_formats_fall_back_to_defaults(self, window, d):
+        window.date_format_edit.setText("  ")
+        window.time_format_edit.setText("")
+        window.save_user_config()
+        assert d.config["date_format"] == "%Y-%m-%d"
+        assert d.config["time_format"] == "%H:%M"
+
+
+class TestImportConflicts:
+    def test_import_reports_overwritten_triggers(self, window, d, monkeypatch, tmp_path):
+        d.add_or_update_snippet("sig", {"type": "variable", "value": "OLD"})
+        imported = {"sig": {"type": "variable", "value": "NEW"}, "new1": {"type": "variable", "value": "x"}}
+        src = tmp_path / "import.json"
+        src.write_text(json.dumps(imported))
+
+        prompts = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **k: prompts.append(k.get("text", a[2] if len(a) > 2 else "")) or QMessageBox.No,
+        )
+        monkeypatch.setattr(
+            QFileDialog, "getOpenFileName", lambda *a, **k: (str(src), ""),
+        )
+        window.import_json()
+        assert any("overwrite 1 existing" in p and "'sig'" in p for p in prompts)
+        # Aborted: nothing imported.
+        assert "new1" not in d.snippets
+        assert d.snippets["sig"]["value"] == "OLD"
+
+    def test_import_proceeds_without_conflicts(self, window, d, monkeypatch, tmp_path):
+        imported = {"fresh": {"type": "variable", "value": "x"}}
+        src = tmp_path / "import.json"
+        src.write_text(json.dumps(imported))
+        prompts = []
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: prompts.append(1) or QMessageBox.Yes)
+        monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(src), ""))
+        window.import_json()
+        assert prompts == []  # no conflict, no prompt
+        assert "fresh" in d.snippets
+
+    def test_import_normalizes_legacy_list_format(self, window, d, monkeypatch, tmp_path):
+        legacy = [{"trigger": "a1", "type": "variable", "value": "one"}]
+        src = tmp_path / "legacy.json"
+        src.write_text(json.dumps(legacy))
+        monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(src), ""))
+        window.import_json()
+        assert d.snippets["a1"]["value"] == "one"
+        assert "trigger" not in d.snippets["a1"]
+
+
+class TestDialogEnabledFlag:
+    def test_new_snippet_defaults_to_enabled(self, qapp):
+        dialog = AddSnippetDialog(None)
+        assert dialog.enabled_check.isChecked() is True
+        snippet = dialog.get_snippet()
+        assert "enabled" not in snippet or snippet["enabled"] is True
+
+    def test_unchecked_writes_enabled_false(self, qapp):
+        dialog = AddSnippetDialog(None)
+        dialog.enabled_check.setChecked(False)
+        snippet = dialog.get_snippet()
+        assert snippet["enabled"] is False
+
+    def test_edit_populates_enabled_state(self, qapp):
+        dialog = AddSnippetDialog(None, snippet={"trigger": "x", "enabled": False})
+        assert dialog.enabled_check.isChecked() is False
+
+
+class TestDisabledSnippetDisplay:
+    def test_disabled_snippet_dimmed_in_tree(self, window, d):
+        d.add_or_update_snippet("dim", {"type": "variable", "value": "x", "enabled": False, "category": "test"})
+        window.refresh_snippet_list()
+        item = find_snippet_item(window.snippet_list, "dim")
+        assert item is not None
+        assert item.foreground(0).color().name() == "#6c7086"
+
+    def test_enabled_snippet_keeps_type_color(self, window, d):
+        window.refresh_snippet_list()
+        item = find_snippet_item(window.snippet_list, "sig")
+        assert item.foreground(0).color().name() == "#a6e3a1"  # variable green
+
+    def test_preview_notes_disabled_state(self, window, d):
+        d.add_or_update_snippet("dim", {"type": "variable", "value": "x", "enabled": False, "category": "test"})
+        window.refresh_snippet_list()
+        item = find_snippet_item(window.snippet_list, "dim")
+        window.snippet_list.setCurrentItem(item)
+        assert "DISABLED" in window.preview_text.toPlainText()
+
+
 class TestTriggerConflicts:
     def test_exact_duplicate_detected(self, window, d):
         conflicts = window.trigger_conflicts("sig")
@@ -467,14 +572,14 @@ class TestStateSync:
 
         assert window.toggle_daemon_btn.isChecked() is False
         assert window.last_enabled_state is False
-        assert "paused" in window.status_label.text()
+        assert window.toggle_daemon_btn.text() == "Daemon: Off"
         assert window.tray_icon.toolTip() == "Texter - Paused"
 
     def test_button_toggle_round_trip(self, window, d):
         window.toggle_daemon(False)
         assert d.enabled is False
         assert window.toggle_daemon_btn.isChecked() is False
-        assert "paused" in window.status_label.text()
+        assert window.toggle_daemon_btn.text() == "Daemon: Off"
 
         window.toggle_daemon(True)
         assert d.enabled is True

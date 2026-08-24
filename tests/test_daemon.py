@@ -1,6 +1,7 @@
 import json
 import re
 import threading
+from datetime import datetime
 from types import SimpleNamespace
 
 import daemon as daemon_mod
@@ -337,6 +338,71 @@ class TestPasteHotkey:
             keyboard.Key.ctrl, keyboard.Key.shift, "v",
             "v", keyboard.Key.shift, keyboard.Key.ctrl,
         ]
+
+
+class TestDateFormatConfig:
+    def test_context_uses_configured_date_format(self, d):
+        d.config["date_format"] = "%d/%m/%Y"
+        assert d.get_context()["date"] == datetime.now().strftime("%d/%m/%Y")
+
+    def test_context_uses_configured_time_format(self, d):
+        d.config["time_format"] = "%H:%M:%S"
+        assert d.get_context()["time"] == datetime.now().strftime("%H:%M:%S")
+
+    def test_date_command_uses_configured_format(self, d):
+        d.add_or_update_snippet(":d", {"type": "command", "action": "date", "category": "test"})
+        d.config["date_format"] = "%d/%m/%Y"
+        type_string(d, " :d")
+        assert daemon_mod.pyperclip.paste() == datetime.now().strftime("%d/%m/%Y")
+
+    def test_datetime_command_combines_formats(self, d):
+        d.add_or_update_snippet(":dt", {"type": "command", "action": "datetime", "category": "test"})
+        d.config["date_format"] = "%d/%m/%Y"
+        d.config["time_format"] = "%H:%M"
+        type_string(d, " :dt")
+        assert daemon_mod.pyperclip.paste() == datetime.now().strftime("%d/%m/%Y %H:%M")
+
+
+class TestSnippetEnableDisable:
+    def test_disabled_snippet_does_not_expand(self, d):
+        d.add_or_update_snippet("off", {"type": "variable", "value": "secret", "enabled": False, "category": "test"})
+        type_string(d, " off")
+        # Not matched: the trigger stays in the buffer as plain text, and
+        # nothing is pasted.
+        assert d.buffer == " off"
+        assert daemon_mod.pyperclip.paste() == ""
+
+    def test_enabled_snippet_expands_normally(self, d):
+        type_string(d, " sig")
+        assert daemon_mod.pyperclip.paste() == "Alvaro <email>"
+
+    def test_disabled_snippet_does_not_record_usage(self, d):
+        d.add_or_update_snippet("off", {"type": "variable", "value": "x", "enabled": False, "category": "test"})
+        type_string(d, " off")
+        assert d.snippets["off"].get("usage", 0) == 0
+
+    def test_disabled_longer_trigger_does_not_defer_enabled_short_one(self, d):
+        # ':d' enabled, ':dt' disabled: typing ':d' then a boundary fires ':d'
+        # immediately (no deferral because ':dt' is disabled).
+        d.add_or_update_snippet(":d", {"type": "command", "action": "date", "category": "test"})
+        d.add_or_update_snippet(":dt", {"type": "command", "action": "datetime", "enabled": False, "category": "test"})
+        d.config["date_format"] = "%Y"
+        type_string(d, " :d ")
+        assert daemon_mod.pyperclip.paste() == datetime.now().strftime("%Y")
+
+    def test_disabled_trigger_not_matched_while_typing_longer(self, d):
+        # 'off' disabled, 'offx' enabled: typing 'offx' fully must expand 'offx'
+        # and not be blocked by the disabled 'off' prefix.
+        d.add_or_update_snippet("off", {"type": "variable", "value": "OLD", "enabled": False, "category": "test"})
+        d.add_or_update_snippet("offx", {"type": "variable", "value": "NEW", "category": "test"})
+        type_string(d, " offx ")
+        assert daemon_mod.pyperclip.paste() == "NEW"
+
+    def test_disabled_command_snippet_does_not_fire(self, d):
+        d.add_or_update_snippet(":q", {"type": "command", "action": "shutdown", "enabled": False, "category": "test"})
+        type_string(d, " :q")
+        # Not matched (stays as plain text), no expansion, no exception.
+        assert d.buffer == " :q"
 
 
 class TestDataPaths:

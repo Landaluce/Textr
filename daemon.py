@@ -95,6 +95,10 @@ class Daemon:
             # Shortcut used to paste expansions in clipboard mode. Some
             # terminals expect a different combo than Ctrl+Shift+V.
             "paste_hotkey": "ctrl+shift+v",
+            # strftime formats for {date}/{time} and the :d/:time/:datetime
+            # commands; configurable in the UI profile settings.
+            "date_format": "%Y-%m-%d",
+            "time_format": "%H:%M",
         }
         if os.path.exists(self.config_file):
             try:
@@ -285,8 +289,8 @@ class Daemon:
         return {
             "name": self.config.get("name", "Alvaro"),
             "email": self.config.get("email", "alvaro@example.com"),
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "time": datetime.now().strftime("%H:%M"),
+            "date": datetime.now().strftime(self.config.get("date_format", "%Y-%m-%d")),
+            "time": datetime.now().strftime(self.config.get("time_format", "%H:%M")),
             "iso": datetime.now().isoformat(timespec="seconds"),
             "week": datetime.now().strftime("%V"),
         }
@@ -611,10 +615,13 @@ class Daemon:
             if action in ("date", "time", "datetime"):
                 # Text-inserting commands expand in the active window like a
                 # normal snippet instead of routing through the manager UI.
+                # Honor the user's configured date/time formats.
+                date_fmt = self.config.get("date_format", "%Y-%m-%d")
+                time_fmt = self.config.get("time_format", "%H:%M")
                 fmt = {
-                    "date": "%Y-%m-%d",
-                    "time": "%H:%M",
-                    "datetime": "%Y-%m-%d %H:%M",
+                    "date": date_fmt,
+                    "time": time_fmt,
+                    "datetime": f"{date_fmt} {time_fmt}",
                 }[action]
                 return datetime.now().strftime(fmt)
             self.run_command(item)
@@ -654,11 +661,23 @@ class Daemon:
             return True  # just typed the trigger
         return buffer[-(len(trigger) + 1)] in self.BOUNDARY_CHARS
 
+    def _enabled(self, snippet):
+        """A snippet is active unless it has "enabled": false."""
+        return not isinstance(snippet, dict) or snippet.get("enabled", True)
+
     def _has_longer_prefix(self, trigger):
-        """True if a longer trigger starts with `trigger` (prefix collision)."""
+        """True if an enabled longer trigger starts with `trigger`.
+
+        Disabled snippets never participate in prefix deferral, so a
+        disabled ':dt' no longer holds back an enabled ':d'.
+        """
         with self.snippets_lock:
-            for other in self.snippets.keys():
-                if len(other) > len(trigger) and other.startswith(trigger):
+            for other, snippet in self.snippets.items():
+                if (
+                    len(other) > len(trigger)
+                    and other.startswith(trigger)
+                    and self._enabled(snippet)
+                ):
                     return True
         return False
 
@@ -671,8 +690,12 @@ class Daemon:
         """
         candidate = self.pending_trigger + extra
         with self.snippets_lock:
-            for other in self.snippets.keys():
-                if len(other) > len(self.pending_trigger) and other.startswith(candidate):
+            for other, snippet in self.snippets.items():
+                if (
+                    len(other) > len(self.pending_trigger)
+                    and other.startswith(candidate)
+                    and self._enabled(snippet)
+                ):
                     return True
         return False
 
@@ -690,6 +713,11 @@ class Daemon:
             item = self.snippets.get(trigger)
 
         if item is None:
+            self.buffer = ""
+            return True
+
+        # Disabled snippets never expand (but still consume the buffer).
+        if not self._enabled(item):
             self.buffer = ""
             return True
 
@@ -755,7 +783,11 @@ class Daemon:
         self.buffer = self.buffer[-self.max_buffer:]
 
         with self.snippets_lock:
-            sorted_triggers = sorted(self.snippets.keys(), key=len, reverse=True)
+            sorted_triggers = sorted(
+                (t for t, s in self.snippets.items() if self._enabled(s)),
+                key=len,
+                reverse=True,
+            )
 
         # Only one trigger can complete at a time (the buffer ends with it), so
         # the first (longest) match wins.
