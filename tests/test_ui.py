@@ -286,11 +286,10 @@ class TestToggleButtonText:
         assert window.toggle_writing_btn.text() == "Human Typing: On"
         assert window.toggle_writing_btn.isChecked() is True
 
-    def test_status_label_does_not_duplicate_button_state(self, window, d):
-        # The buttons carry the state now; the label is for transient messages.
+    def test_buttons_carry_state_without_status_label(self, window, d):
+        # No status label exists; the buttons carry the state.
+        assert not hasattr(window, "status_label")
         window.set_daemon_enabled(False)
-        assert "Daemon:" not in window.status_label.text()
-        assert "Human Typing" not in window.status_label.text()
         assert window.toggle_daemon_btn.text() == "Daemon: Off"
         assert window.toggle_writing_btn.text() == "Human Typing: Off"
 

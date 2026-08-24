@@ -146,7 +146,7 @@ Threading rules that keep the daemon alive:
 
 ## Troubleshooting
 
-- **Triggers not expanding** — the daemon may be paused: press `Ctrl+Shift+P` once, or check the Daemon button/status label in the Texter window.
+- **Triggers not expanding** — the daemon may be paused: press `Ctrl+Shift+P` once, or check the Daemon button in the Texter window.
 - **Nothing happens on Wayland** — check the terminal output: Textr prints why capture or output failed. Likely causes: your user isn't in the `input` group (evdev capture), `python-evdev` isn't installed, or the `ydotool` daemon isn't running.
 - **Paste does nothing in a terminal** — some terminals expect a different paste shortcut than `Ctrl+Shift+V`. Set it via **Settings → Paste shortcut** in the UI.
 - **Input capture broken on Wayland** — run `python3 -m diag` (or `textr-diag` after installing) for a report on session type, device readability, missing packages, and ydotool; add `--listen 5` to press keys and see the keycode → character mapping under your layout.
