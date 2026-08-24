@@ -210,6 +210,32 @@ class TestReadability:
         assert long_item.foreground(0).color().name() == "#89b4fa"
 
 
+class TestToggleButtonText:
+    def test_daemon_label_tracks_state(self, window, d):
+        assert window.toggle_daemon_btn.text() == "Daemon: On"
+        window.set_daemon_enabled(False)
+        assert window.toggle_daemon_btn.text() == "Daemon: Off"
+        window.set_daemon_enabled(True)
+        assert window.toggle_daemon_btn.text() == "Daemon: On"
+
+    def test_writing_label_tracks_state(self, window):
+        assert window.toggle_writing_btn.text() == "Human Typing: Off"
+        window.toggle_writing_mode(True)
+        assert window.toggle_writing_btn.text() == "Human Typing: On"
+        window.toggle_writing_mode(False)
+        assert window.toggle_writing_btn.text() == "Human Typing: Off"
+
+    def test_sync_command_updates_writing_label(self, window, d):
+        d.writing_mode = True
+        window.handle_daemon_command("sync_writing_mode")
+        assert window.toggle_writing_btn.text() == "Human Typing: On"
+        assert window.toggle_writing_btn.isChecked() is True
+
+    def test_status_label_uses_words_not_bools(self, window, d):
+        window.set_daemon_enabled(False)
+        assert "Human Typing: disabled" in window.status_label.text()
+
+
 class TestEditSnippet:
     def test_edit_updates_selected_snippet(self, window, d, monkeypatch):
         from PySide6.QtWidgets import QDialog
