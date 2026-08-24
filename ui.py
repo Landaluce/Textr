@@ -90,6 +90,29 @@ class SnippetTreeDelegate(QStyledItemDelegate):
 class SnippetTreeWidget(QTreeWidget):
     """Snippet tree; dropping a snippet onto a category group moves it there."""
 
+    def contextMenuEvent(self, event):
+        """Right-click menu on a snippet row: edit / duplicate / toggle / delete."""
+        item = self.itemAt(event.pos())
+        if item is None or item.data(0, Qt.UserRole) is None:
+            return  # empty area or group header: no menu
+        self.setCurrentItem(item)
+        window = self.window()
+        trigger = item.data(0, Qt.UserRole)
+        menu = self._build_context_menu(window, trigger)
+        menu.exec(event.globalPos())
+
+    def _build_context_menu(self, window, trigger):
+        """The right-click menu for a snippet row, wired to the window handlers."""
+        snippet = window.daemon.snippets.get(trigger, {}) if window.daemon else {}
+        enabled = snippet.get("enabled", True) if isinstance(snippet, dict) else True
+        menu = QMenu(self)
+        menu.addAction("Edit", window.edit_snippet)
+        menu.addAction("Duplicate", window.duplicate_snippet)
+        menu.addAction("Disable" if enabled else "Enable", window.toggle_snippet_enabled)
+        menu.addSeparator()
+        menu.addAction("Delete", window.delete_snippet)
+        return menu
+
     def dropEvent(self, event):
         window = self.window()
         grouping = getattr(window, "group_combo", None)
@@ -664,10 +687,13 @@ class TexterUI(QMainWindow):
                 self.snippet_list.setCurrentItem(item)
 
     def _matches_search(self, trigger, snippet, query):
-        """True if the trigger or any expansion text contains the query."""
+        """True if the trigger, tags, or any expansion text contains the query."""
         if not query:
             return True
         if query in trigger.lower():
+            return True
+        tags = " ".join(snippet.get("tags") or []).lower()
+        if query in tags:
             return True
         snippet_type = snippet.get("type", "variable")
         if snippet_type == "variable":
@@ -926,6 +952,48 @@ class TexterUI(QMainWindow):
                 self.daemon.replace_snippet(trigger, new_trigger, new_snippet)
                 self.refresh_snippet_list()
                 print(f"UI: Edited snippet '{new_trigger}' (saved)")
+
+    def duplicate_snippet(self):
+        """Clone the selected snippet into a pre-filled Add dialog."""
+        selected = self.snippet_list.selectedItems()
+        if not selected or not self.daemon:
+            return
+
+        trigger = selected[0].data(0, Qt.UserRole)
+        if not trigger:  # group headers aren't duplicable
+            return
+        source = dict(self.daemon.snippets.get(trigger, {}))
+        # Pre-fill everything except the trigger so the user types a new one.
+        dialog = AddSnippetDialog(self, snippet=source, categories=self.daemon.get_categories())
+        dialog.setWindowTitle(f"Duplicate '{trigger}'")
+        dialog.trigger_input.setFocus()
+        if dialog.exec() == QDialog.Accepted:
+            new_snippet = dialog.get_snippet()
+            if new_snippet and self.daemon:
+                new_trigger = new_snippet.pop("trigger")
+                if not new_trigger:  # user left the trigger empty
+                    return
+                if not self._confirm_trigger_conflicts(new_trigger):
+                    return
+                self.daemon.add_or_update_snippet(new_trigger, new_snippet)
+                self.refresh_snippet_list()
+                print(f"UI: Duplicated snippet '{trigger}' as '{new_trigger}' (saved)")
+
+    def toggle_snippet_enabled(self):
+        """Flip the enabled flag of the selected snippet and persist it."""
+        selected = self.snippet_list.selectedItems()
+        if not selected or not self.daemon:
+            return
+
+        trigger = selected[0].data(0, Qt.UserRole)
+        if not trigger:  # group headers aren't snippets
+            return
+        snippet = dict(self.daemon.snippets.get(trigger, {}))
+        snippet["enabled"] = not snippet.get("enabled", True)
+        self.daemon.add_or_update_snippet(trigger, snippet)
+        self.refresh_snippet_list()
+        state = "Disabled" if not snippet["enabled"] else "Enabled"
+        print(f"UI: {state} snippet '{trigger}' (saved)")
 
     def delete_snippet(self):
         selected = self.snippet_list.selectedItems()

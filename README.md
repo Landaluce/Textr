@@ -9,7 +9,7 @@ Text expansion for Linux (X11 and Wayland). Type a short trigger anywhere and Te
 - **Two insertion modes** — fast clipboard paste (default) or human-like typing ("Human Typing")
 - **Word-boundary matching** — triggers only fire after whitespace/punctuation, never mid-word
 - **Prefix disambiguation** — when one trigger is the prefix of another (`:d` vs `:dt`), expansion waits until the next key reveals which one you meant; the longer trigger wins
-- **Grouped snippet manager** — group snippets by category (with `python/web`-style nested folders), by type, or by tag, with an optional second "then by" level (default: category → tag); search filters as you type; sort by name, recently used, or most used
+- **Grouped snippet manager** — group snippets by category (with `python/web`-style nested folders), by type, or by tag, with an optional second "then by" level (default: category → tag); search filters triggers, tags, and expansion text as you type; sort by name, recently used, or most used
 - **Tags & usage tracking** — snippets carry multiple comma-separated tags, and the daemon records how often and when each snippet expands
 - **Template variables** — `{name}`, `{email}`, `{date}`, `{time}`, `{iso}`, `{week}`, `{clipboard}`, plus `{cursor}` to leave the caret mid-expansion
 - **Per-snippet enable/disable** — turn a snippet off (edit → uncheck **Enabled**) without deleting it; disabled snippets are dimmed in the tree and never expand
@@ -64,12 +64,13 @@ This starts both the UI window and the background daemon. Close or hide the wind
 | Shortcut | Where | Action |
 | -------- | ----- | ------ |
 | `Ctrl+Shift+P` | anywhere (global) | Toggle the daemon pause/resume |
+| `Ctrl+Shift+Space` | anywhere (global) | Bring the manager window to the front |
 | `Ctrl+N` | manager window | Add a snippet |
 | `F2` / `Enter` | manager window | Edit the selected snippet |
 | `Del` | manager window | Delete the selected snippet |
 | `Ctrl+Shift+V` | expansion (paste mode) | Insert the expansion text (configurable via **Settings → Paste shortcut**) |
 
-Edit/Delete only fire when the snippet list has focus, so they never trigger while you're typing in the search box. The paste shortcut is a combo Textr *sends* to paste — it does not work in Human Typing mode (typed char-by-char) or on Wayland (typed via ydotool).
+Edit/Delete only fire when the snippet list has focus, so they never trigger while you're typing in the search box. Right-clicking a snippet in the list opens a context menu (Edit / Duplicate / Enable-Disable / Delete); the same actions are available from the buttons, and **Duplicate** clones the selected snippet into a pre-filled Add dialog. The paste shortcut is a combo Textr *sends* to paste — it does not work in Human Typing mode (typed char-by-char) or on Wayland (typed via ydotool).
 
 ### Snippet types
 

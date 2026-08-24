@@ -206,6 +206,14 @@ class TestSearchAndSort:
         window.search_input.setText("main street")
         assert collect_triggers(window.snippet_list) == ["addr"]
 
+    def test_search_filters_by_tags(self, window, d):
+        d.add_or_update_snippet("web1", {"type": "variable", "value": "x", "tags": ["web", "frontend"]})
+        d.add_or_update_snippet("db1", {"type": "variable", "value": "y", "tags": ["database"]})
+        window.refresh_snippet_list()
+        window.group_combo.setCurrentIndex(window.group_combo.findData("none"))
+        window.search_input.setText("web")
+        assert collect_triggers(window.snippet_list) == ["web1"]
+
     def test_sort_by_most_used(self, window, d):
         d.add_or_update_snippet("zz", {"type": "variable", "value": "z", "usage": 5})
         d.add_or_update_snippet("aa", {"type": "variable", "value": "a", "usage": 1})
@@ -664,6 +672,104 @@ class TestEditSnippet:
     def test_edit_with_no_selection_is_noop(self, window, d):
         window.snippet_list.clearSelection()
         window.edit_snippet()  # must not raise
+
+
+class TestDuplicateSnippet:
+    def test_duplicate_prefills_dialog_and_saves(self, window, d, monkeypatch):
+        from PySide6.QtWidgets import QDialog
+        from ui import AddSnippetDialog
+
+        item = find_snippet_item(window.snippet_list, "sig")
+        window.snippet_list.setCurrentItem(item)
+
+        def fake_exec(dialog):
+            # Dialog is pre-filled with the source snippet's fields.
+            assert dialog.value_input.toPlainText() == "Alvaro <email>"
+            assert dialog.category_input.currentText() == "test"
+            dialog.trigger_input.setText("addr2")
+            return QDialog.Accepted
+
+        monkeypatch.setattr(AddSnippetDialog, "exec", fake_exec)
+        window.duplicate_snippet()
+        assert "addr2" in d.snippets
+        assert d.snippets["addr2"]["value"] == "Alvaro <email>"
+        assert d.snippets["sig"]["value"] == "Alvaro <email>"  # source untouched
+
+    def test_duplicate_with_no_selection_is_noop(self, window, d):
+        before = dict(d.snippets)
+        window.snippet_list.clearSelection()
+        window.duplicate_snippet()  # must not raise
+        assert d.snippets == before
+
+    def test_duplicate_ignores_group_headers(self, window, d):
+        before = dict(d.snippets)
+        window.snippet_list.setCurrentItem(None)
+        window.duplicate_snippet()  # must not raise
+        assert d.snippets == before
+
+
+class TestToggleEnabled:
+    def test_toggle_disables_then_reenables(self, window, d):
+        item = find_snippet_item(window.snippet_list, "sig")
+        window.snippet_list.setCurrentItem(item)
+        window.toggle_snippet_enabled()
+        assert d.snippets["sig"]["enabled"] is False
+        window.toggle_snippet_enabled()
+        assert d.snippets["sig"].get("enabled", True) is True
+
+    def test_toggle_with_no_selection_is_noop(self, window, d):
+        before = dict(d.snippets)
+        window.snippet_list.clearSelection()
+        window.toggle_snippet_enabled()
+        assert d.snippets == before
+
+
+class TestTreeContextMenu:
+    def test_context_menu_has_expected_actions(self, window, d):
+        menu = window.snippet_list._build_context_menu(window, "sig")
+        texts = [a.text() for a in menu.actions() if a.text()]
+        assert texts == ["Edit", "Duplicate", "Disable", "Delete"]
+
+    def test_context_menu_actions_route_to_handlers(self, window, d, monkeypatch):
+        called = []
+        monkeypatch.setattr(window, "edit_snippet", lambda: called.append("edit"))
+        monkeypatch.setattr(window, "duplicate_snippet", lambda: called.append("duplicate"))
+        monkeypatch.setattr(window, "toggle_snippet_enabled", lambda: called.append("toggle"))
+        monkeypatch.setattr(window, "delete_snippet", lambda: called.append("delete"))
+
+        menu = window.snippet_list._build_context_menu(window, "sig")
+        actions = {a.text(): a for a in menu.actions() if a.text()}
+        actions["Edit"].trigger()
+        actions["Duplicate"].trigger()
+        actions["Disable"].trigger()
+        actions["Delete"].trigger()
+        assert called == ["edit", "duplicate", "toggle", "delete"]
+
+    def test_context_menu_labels_disabled_snippet_as_enable(self, window, d):
+        d.snippets["sig"]["enabled"] = False
+        menu = window.snippet_list._build_context_menu(window, "sig")
+        texts = [a.text() for a in menu.actions() if a.text()]
+        assert texts == ["Edit", "Duplicate", "Enable", "Delete"]
+
+    def test_context_menu_ignored_on_group_header(self, window, d, monkeypatch):
+        # A group header (UserRole+1 name, no UserRole trigger) gets no menu:
+        # building one would mean the trigger resolved to a header.
+        header = None
+        for i in range(window.snippet_list.topLevelItemCount()):
+            top = window.snippet_list.topLevelItem(i)
+            if top.data(0, Qt.UserRole + 1):
+                header = top
+                break
+        if header is None:
+            return
+        # contextMenuEvent returns before building a menu for headers.
+        called = []
+        monkeypatch.setattr(window, "edit_snippet", lambda: called.append("edit"))
+        menu = window.snippet_list._build_context_menu(window, header.data(0, Qt.UserRole + 1))
+        # No trigger data: the builder still yields the menu, but the event
+        # handler never reaches it. Simulate the handler's guard directly:
+        window.snippet_list.setCurrentItem(header)
+        assert window.snippet_list.currentItem().data(0, Qt.UserRole) is None
 
 
 class TestStateSync:

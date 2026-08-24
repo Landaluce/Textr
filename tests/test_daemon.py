@@ -465,8 +465,9 @@ class TestLayoutConfig:
         captured = {}
 
         class FakeListener:
-            def __init__(self, on_key=None, on_hotkey=None, layout="us"):
+            def __init__(self, on_key=None, on_hotkey=None, on_show_hotkey=None, layout="us"):
                 captured["layout"] = layout
+                captured["on_show_hotkey"] = on_show_hotkey
 
             def start(self):
                 return True
@@ -478,6 +479,18 @@ class TestLayoutConfig:
 
         assert d._start_wayland_input() is True
         assert captured["layout"] == "fr"
+        # Ctrl+Shift+Space summons the window through the same callback.
+        assert captured["on_show_hotkey"].__func__ is d.show_window_via_hotkey.__func__
+
+    def test_show_window_hotkey_emits_ui_command(self, d):
+        ui = FakeUI()
+        d.ui = ui
+        d.show_window_via_hotkey()
+        assert ui.daemon_command.sent == ["ui"]
+
+    def test_show_window_hotkey_without_ui_is_safe(self, d):
+        d.ui = None
+        d.show_window_via_hotkey()  # must not raise
 
 
 class TestUsageTracking:
