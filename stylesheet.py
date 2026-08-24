@@ -6,8 +6,8 @@ dark_stylesheet = """
     QWidget {
         background-color: #1e1e2e;
         color: #cdd6f4;
-        font-family: 'Segoe UI', Arial, sans-serif;
-        font-size: 13px;
+        font-family: 'Segoe UI', 'Ubuntu', 'Noto Sans', Arial, sans-serif;
+        font-size: 14px;
     }
     QGroupBox {
         border: 1px solid #45475a;
@@ -23,7 +23,7 @@ dark_stylesheet = """
         left: 10px;
         padding: 0 5px;
     }
-    QLineEdit, QTextEdit, QComboBox, QListWidget {
+    QLineEdit, QTextEdit, QComboBox, QTreeWidget {
         background-color: #313244;
         color: #cdd6f4;
         border: 1px solid #45475a;
@@ -32,7 +32,7 @@ dark_stylesheet = """
         selection-background-color: #b4befe;
         selection-color: #11111b;
     }
-    QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QListWidget:focus {
+    QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QTreeWidget:focus {
         border: 1px solid #b4befe;
     }
     QPushButton {
@@ -62,15 +62,16 @@ dark_stylesheet = """
         background-color: #a6e3a1;
         color: #11111b;
     }
-    QListWidget::item {
-        padding: 8px;
+    QTreeWidget::item {
+        padding: 6px;
         border-bottom: 1px solid #313244;
-    QListWidget::item:selected {
+    }
+    QTreeWidget::item:selected {
         background-color: #b4befe;
         color: #11111b;
         border-radius: 4px;
     }
-    QListWidget::item:hover {
+    QTreeWidget::item:hover {
         background-color: #45475a;
         border-radius: 4px;
     }

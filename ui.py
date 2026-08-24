@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QAbstractItemView
 )
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QIcon, QAction, QPixmap, QPainter, QColor
+from PySide6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor
 
 
 def create_status_icon(color_name):
@@ -311,9 +311,8 @@ class TexterUI(QMainWindow):
         view_layout.addWidget(self.sort_combo)
         left_layout.addLayout(view_layout)
 
-        # Snippet tree (groupable list)
+        # Snippet tree (groupable list); font comes from the QSS stylesheet.
         self.snippet_list = SnippetTreeWidget()
-        self.snippet_list.setFont(QFont("Arial", 14))
         self.snippet_list.setHeaderHidden(True)
         self.snippet_list.setDragDropMode(QAbstractItemView.InternalMove)
         self.snippet_list.itemSelectionChanged.connect(self.on_selection_changed)
@@ -574,22 +573,27 @@ class TexterUI(QMainWindow):
         item = QTreeWidgetItem(parent, [name])
         item.setData(0, Qt.UserRole + 1, name)
         item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+        # Bold lavender headers (Catppuccin Mocha) so groups stand out.
+        item.setForeground(0, QColor("#cba6f7"))
+        group_font = item.font(0)
+        group_font.setBold(True)
+        item.setFont(0, group_font)
         return item
+
+    # Light Catppuccin Mocha accents, readable on the dark background.
+    TYPE_COLORS = {
+        "command": "#f38ba8",   # red
+        "template": "#89b4fa",  # blue
+        "variable": "#a6e3a1",  # green
+    }
 
     def _add_snippet_item(self, parent, trigger, snippet):
         item = QTreeWidgetItem(parent, [trigger])
         item.setData(0, Qt.UserRole, trigger)
         snippet_type = snippet.get("type", "variable")
         category = snippet.get("category", "uncategorized")
-        if snippet_type == "command":
-            item.setForeground(0, Qt.darkRed)
-            item.setToolTip(0, f"Command | Category: {category}")
-        elif snippet_type == "template":
-            item.setForeground(0, Qt.darkBlue)
-            item.setToolTip(0, f"Template | Category: {category}")
-        else:
-            item.setForeground(0, Qt.darkGreen)
-            item.setToolTip(0, f"Variable | Category: {category}")
+        item.setForeground(0, QColor(self.TYPE_COLORS.get(snippet_type, "#cdd6f4")))
+        item.setToolTip(0, f"{snippet_type.capitalize()} | Category: {category}")
         return item
 
     def on_category_changed(self, category):
