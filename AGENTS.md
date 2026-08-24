@@ -16,9 +16,10 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
 
 | Command | Purpose |
 |---------|---------|
-| `bash run.sh` or `python3 main.py` | Start the application (launches daemon + UI) |
+| `bash run.sh` or `python3 main.py` | Start the application from the source tree (launches daemon + UI) |
+| `python3 -m pip install .` then `textr` | Install as a package and start it (console entry point) |
 | `python3 -c "from daemon import Daemon; d = Daemon(); d.load_snippets()"` | Test daemon snippet loading |
-| `python3 -m pip install -r requirements.txt` | Install dependencies (PySide6, pynput, pyperclip) |
+| `python3 -m pip install -r requirements.txt` | Install dependencies (PySide6, pynput, pyperclip, evdev) |
 
 ## Architecture & Key Files
 
@@ -29,6 +30,9 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
   - `load_config()`: Loads user settings from `config.json`
   - `save_config()`: Persists configuration changes
 - **Snippet Types**: `variable` (static text), `template` (language-specific code), `command` (actions like toggle_pause)
+- **Input backends**: pynput (X11/XWayland) and `input_wayland.py` (evdev, native Wayland) both emit normalized `keys.Key` objects (`name`/`char`) consumed by the backend-agnostic `_handle_key`
+- **Prefix disambiguation**: when a trigger is the prefix of another (`:d` vs `:dt`), `_handle_key` defers expansion via `pending_trigger` until the next key disambiguates (longer trigger, boundary key/char fires the short one, or abort)
+- **Data paths**: `_resolve_path()` prefers `$TEXTR_CONFIG_DIR`, then a legacy CWD file, then `$XDG_CONFIG_HOME/textr/`
 
 ### ui.py
 - **Responsibility**: QApplication GUI with system tray icon
@@ -41,6 +45,7 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
 ### Configuration Files
 - **config.json**: User settings (name, email, custom options) - loaded at startup, persisted on save
 - **snippets.json**: Snippet definitions - structure: `[{"trigger": "xx", "type": "variable", "value": "...", "category": "..."}]`
+- **Location**: resolved by `Daemon._resolve_path()` to `$XDG_CONFIG_HOME/textr/` (default `~/.config/textr/`) with a legacy fallback to files next to the working directory; `$TEXTR_CONFIG_DIR` overrides everything (used by tests to stay hermetic)
 
 ## Common Development Tasks
 
@@ -49,6 +54,7 @@ When modifying `daemon.py`:
 - Import required modules at top (keyboard, pyperclip, json, etc. already imported)
 - Update `__init__()` to initialize new state variables
 - Add corresponding load/save logic to `load_config()` / `save_config()` for persistence
+- Keep key handling backend-agnostic: work with normalized keys (`key.name`/`key.char`, see `keys.py`) rather than pynput key objects, and extend both backends if behavior must differ by platform
 - Test with: `python3 -c "from daemon import Daemon; d = Daemon()"`
 
 ### Modifying UI/Settings
@@ -85,15 +91,17 @@ Snippet JSON structure:
 
 ### Dependencies & Environment
 - **Python 3.9+** (Pipfile specifies 3.9)
-- **Key packages**: PySide6 (UI framework), pynput (keyboard monitoring), pyperclip (clipboard)
+- **Key packages**: PySide6 (UI framework), pynput (X11 keyboard monitoring), pyperclip (clipboard), evdev (Wayland keyboard capture, Linux only)
+- **Packaging**: `pyproject.toml` exposes the `textr` console script; adding a module requires listing it in `[tool.setuptools] py-modules`
 - **Development**: ipykernel available in Pipfile for interactive environments
 
 ## Debugging & Common Issues
 
 ### Daemon Not Expanding Snippets
-1. Check `snippets.json` is valid JSON and in correct location
-2. Verify keyboard listener is active: daemon has `self.listener` and `self.hotkey_listener`
+1. Check `snippets.json` is valid JSON and in correct location (see `_resolve_path` — it may now live in `~/.config/textr/`)
+2. Verify keyboard listener is active: on X11 the daemon has `self.listener` and `self.hotkey_listener`; on Wayland `self.wayland_input` (evdev) must be running — check the startup messages for permission errors
 3. Check debug output: ensure snippet trigger matches exactly
+4. With both `:d` and `:dt` defined, `:d` will not fire until a boundary key/char follows (prefix disambiguation) — expected
 
 ### UI Not Responding
 1. Ensure PySide6 event loop is running (happens in `main.py`)

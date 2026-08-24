@@ -4,6 +4,10 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+PySide6 = ">=6.6"
+pynput = ">=1.7"
+pyperclip = ">=1.9"
+evdev = { version = ">=1.6", markers = "sys_platform == 'linux'" }
 
 [dev-packages]
 ipykernel = "*"

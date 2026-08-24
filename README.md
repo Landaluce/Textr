@@ -1,6 +1,6 @@
 # Textr
 
-Text expansion for Linux (X11). Type a short trigger anywhere and Textr expands it into full text, code templates, or actions — with a PySide6 GUI for managing snippets and settings.
+Text expansion for Linux (X11 and Wayland). Type a short trigger anywhere and Textr expands it into full text, code templates, or actions — with a PySide6 GUI for managing snippets and settings.
 
 ## Features
 
@@ -8,31 +8,48 @@ Text expansion for Linux (X11). Type a short trigger anywhere and Textr expands 
 - **Three snippet types** — static text (`variable`), per-language code (`template`), and actions (`command`)
 - **Two insertion modes** — fast clipboard paste (default) or human-like typing ("Human Typing")
 - **Word-boundary matching** — triggers only fire after whitespace/punctuation, never mid-word
-- **Template variables** — `{name}`, `{email}`, `{date}`, `{time}`, `{clipboard}`
+- **Prefix disambiguation** — when one trigger is the prefix of another (`:d` vs `:dt`), expansion waits until the next key reveals which one you meant; the longer trigger wins
+- **Template variables** — `{name}`, `{email}`, `{date}`, `{time}`, `{iso}`, `{week}`, `{clipboard}`, plus `{cursor}` to leave the caret mid-expansion
 - **Global hotkey** — `Ctrl+Shift+P` toggles pause/resume
 - **Crash resilience** — the keyboard listener survives internal errors and restarts automatically instead of silently dying
 
 ## Requirements
 
-- Linux with X11 (Wayland is not supported by the keyboard backend)
+- Linux (X11 or Wayland)
 - Python 3.9+
 
 ```txt
 PySide6>=6.6
 pynput>=1.7
 pyperclip>=1.9
+evdev>=1.6; sys_platform == 'linux'
 ```
+
+### Wayland notes
+
+- **Input capture** uses `evdev` (raw `/dev/input/event*` reads) so triggers work in native Wayland apps. Your user needs read access to the input devices — either run as root or add your user to the `input` group and log in again. If evdev capture is unavailable, Textr falls back to pynput, which only sees XWayland apps.
+- **Typing output** goes through `ydotool` (the daemon must be running). Install it from [https://github.com/ReimuNotMoe/ydotool](https://github.com/ReimuNotMoe/ydotool). The layout for captured keys is US QWERTY.
 
 ## Installation
 
+Either install as a package (recommended for regular use):
+
+```bash
+python3 -m pip install .        # installs the `textr` command
+```
+
+Or run from the source tree:
+
 ```bash
 python3 -m pip install -r requirements.txt
+bash run.sh                     # or: python3 main.py
 ```
 
 ## Usage
 
 ```bash
-bash run.sh          # or: python3 main.py
+textr                            # installed as a package
+bash run.sh                      # or: python3 main.py, from the source tree
 ```
 
 This starts both the UI window and the background daemon. Close or hide the window; triggers keep working while it is hidden.
@@ -43,7 +60,7 @@ This starts both the UI window and the background daemon. Close or hide the wind
 | ------ | ---------- |
 | `variable` | Expands to static text, e.g. trigger `sig` → your signature |
 | `template` | Expands to language-specific code chosen by the current language selector |
-| `command` | Performs an action (no text inserted), e.g. `:d` inserts today's date |
+| `command` | Performs an action (no text inserted), e.g. `:pause` toggles pause/resume |
 
 Snippet JSON structure:
 
@@ -58,6 +75,8 @@ Snippet JSON structure:
 
 Templates use `{"python": "...", "javascript": "..."}` under `"languages"` and support the same `{variable}` substitution.
 
+Put `{cursor}` anywhere in an expansion to leave the caret there after insertion instead of at the end — handy for filling in the middle of a snippet, e.g. `function f() { {cursor} }`.
+
 ### Built-in commands
 
 Commands are just snippets of type `command` with an `action` field:
@@ -66,7 +85,7 @@ Commands are just snippets of type `command` with an `action` field:
 | -------- | -------- |
 | `toggle_pause` / `resume` | Pause or resume expansion |
 | `set_language` | Switch the template language (`value` holds the language) |
-| `date` / `time` / `datetime` | Insert the current date/time |
+| `date` / `time` / `datetime` | Insert the current date/time into the active window |
 | `reload` | Re-read `snippets.json` from disk |
 | `save` | Persist snippets and config |
 | `ui` / `top` / `hide` | Show, raise, or hide the manager window |
@@ -74,7 +93,11 @@ Commands are just snippets of type `command` with an `action` field:
 
 ## Configuration & data files
 
-Both files live next to the source and are regenerated if missing:
+Data files are looked up in this order:
+
+1. `$TEXTR_CONFIG_DIR` (used by tests; unset normally)
+2. a file already present next to the working directory (legacy source-tree layout)
+3. `$XDG_CONFIG_HOME/textr/` (defaults to `~/.config/textr/`), created on demand
 
 - `config.json` — user profile (`name`, `email`)
 - `snippets.json` — all snippet definitions
@@ -94,9 +117,12 @@ The test suite exercises the daemon without X11: the keyboard controller, clipbo
 ```text
 main.py ── starts ──> TexterUI (Qt GUI thread)
                   └─> Daemon.run() on a worker thread
-                        ├─ pynput Listener  -> on_press -> buffer + trigger match
-                        └─ pynput GlobalHotKeys (Ctrl+Shift+P)
+                        ├─ pynput Listener (X11)  -> on_press -> buffer + trigger match
+                        │    └─ evdev WaylandInputListener (Wayland)
+                        └─ hotkey (Ctrl+Shift+P): pynput GlobalHotKeys or evdev
 ```
+
+Both input backends translate keys into a normalized `keys.Key` (`name`/`char`), so the daemon's core matching in `_handle_key` is backend-agnostic. Typing output on X11 uses the pynput controller + clipboard; on Wayland it uses ydotool.
 
 Threading rules that keep the daemon alive:
 
@@ -106,5 +132,6 @@ Threading rules that keep the daemon alive:
 ## Troubleshooting
 
 - **Triggers not expanding** — the daemon may be paused: press `Ctrl+Shift+P` once, or check the Daemon button/status label in the Texter window.
+- **Nothing happens on Wayland** — check the terminal output: Textr prints why capture or output failed. Likely causes: your user isn't in the `input` group (evdev capture), `python-evdev` isn't installed, or the `ydotool` daemon isn't running.
 - **Paste does nothing in a terminal** — some terminals expect a different paste shortcut than `Ctrl+Shift+V`.
 - **Listener errors** — the daemon logs exceptions to the terminal and keeps running; if you see repeated `exception in key handler` tracebacks, check recently edited snippets for missing fields.
