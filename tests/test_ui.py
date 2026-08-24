@@ -1,3 +1,4 @@
+import json
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -234,6 +235,23 @@ class TestToggleButtonText:
     def test_status_label_uses_words_not_bools(self, window, d):
         window.set_daemon_enabled(False)
         assert "Human Typing: disabled" in window.status_label.text()
+
+
+class TestLanguagePersistence:
+    def test_language_change_persists_to_config(self, window, d):
+        window.on_language_changed("rust")
+        assert d.current_language == "rust"
+        with open(d.config_file) as f:
+            assert json.load(f)["language"] == "rust"
+
+    def test_new_window_uses_config_language(self, qapp, d):
+        d.set_language("javascript")
+        second = TexterUI(daemon=d)
+        try:
+            assert second.language_combo.currentText() == "javascript"
+        finally:
+            second.status_timer.stop()
+            second.tray_icon.hide()
 
 
 class TestEditSnippet:
