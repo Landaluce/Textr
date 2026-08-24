@@ -75,7 +75,12 @@ class Daemon:
 
     def load_config(self):
         self.config_file = self._resolve_path("config.json")
-        self.config = {"name": "Alvaro", "email": "alvaro@example.com"}
+        self.config = {
+            "name": "Alvaro",
+            "email": "alvaro@example.com",
+            # Keyboard layout used by the evdev Wayland listener (input_wayland.py).
+            "layout": "us",
+        }
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, "r") as f:
@@ -729,6 +734,7 @@ class Daemon:
         self.wayland_input = WaylandInputListener(
             on_key=self.on_press,
             on_hotkey=self.toggle_pause_via_hotkey,
+            layout=self.config.get("layout", "us"),
         )
         return self.wayland_input.start()
 

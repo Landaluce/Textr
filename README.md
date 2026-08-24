@@ -28,7 +28,8 @@ evdev>=1.6; sys_platform == 'linux'
 ### Wayland notes
 
 - **Input capture** uses `evdev` (raw `/dev/input/event*` reads) so triggers work in native Wayland apps. Your user needs read access to the input devices — either run as root or add your user to the `input` group and log in again. If evdev capture is unavailable, Textr falls back to pynput, which only sees XWayland apps.
-- **Typing output** goes through `ydotool` (the daemon must be running). Install it from [https://github.com/ReimuNotMoe/ydotool](https://github.com/ReimuNotMoe/ydotool). The layout for captured keys is US QWERTY.
+- **Typing output** goes through `ydotool` (the daemon must be running). Install it from [https://github.com/ReimuNotMoe/ydotool](https://github.com/ReimuNotMoe/ydotool).
+- **Keyboard layout** — evdev reports keycodes, not characters, so the captured keys must be mapped through your keyboard layout. Set it to `us`, `uk`, `de`, `fr`, or `es` in Settings (stored as `"layout"` in `config.json`; defaults to `us`). AltGr characters (e.g. `@` on a German layout) are supported. Layout tables are best-effort approximations of the common variants — extend `LAYOUTS` in `input_wayland.py` to add more.
 
 ## Installation
 
