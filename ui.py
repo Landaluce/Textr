@@ -605,7 +605,7 @@ class TexterUI(QMainWindow):
             self.preview_text.clear()
             return
 
-        trigger = selected[0].data(Qt.UserRole)
+        trigger = selected[0].data(0, Qt.UserRole)
         if not trigger:  # a group header, not a snippet
             self.preview_text.clear()
             return
@@ -663,7 +663,7 @@ class TexterUI(QMainWindow):
         if not selected or not self.daemon:
             return
 
-        trigger = selected[0].data(Qt.UserRole)
+        trigger = selected[0].data(0, Qt.UserRole)
         if not trigger:  # group headers aren't editable
             return
         snippet = {"trigger": trigger, **self.daemon.snippets.get(trigger, {})}
@@ -683,7 +683,7 @@ class TexterUI(QMainWindow):
         if not selected or not self.daemon:
             return
 
-        trigger = selected[0].data(Qt.UserRole)
+        trigger = selected[0].data(0, Qt.UserRole)
         if not trigger:  # group headers aren't deletable
             return
         reply = QMessageBox.question(self, "Confirm", f"Delete '{trigger}'?")
