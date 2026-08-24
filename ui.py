@@ -214,11 +214,12 @@ class TexterUI(QMainWindow):
                 return
             self.toggle_writing_btn.blockSignals(True)
             self.toggle_writing_btn.setChecked(self.daemon.writing_mode)
+            self.toggle_writing_btn.blockSignals(False)
+            self._sync_toggle_text()
             self.status_label.setText(
                 "Status: Daemon: " + ("enabled" if self.daemon.enabled else "paused") +
                 ", Human Typing: " + ("enabled" if self.daemon.writing_mode else "disabled")
             )
-            self.toggle_writing_btn.blockSignals(False)
 
     def quit_app(self):
         """Quit the entire application"""
@@ -395,6 +396,7 @@ class TexterUI(QMainWindow):
         self.toggle_writing_btn.setCheckable(True)
         self.toggle_writing_btn.setChecked(self.daemon.writing_mode if self.daemon else False)
         self.toggle_writing_btn.toggled.connect(self.toggle_writing_mode)
+        self._sync_toggle_text()
 
         self.quit_btn = QPushButton("Quit")
         self.quit_btn.clicked.connect(self.quit_button)
@@ -696,6 +698,18 @@ class TexterUI(QMainWindow):
             self.refresh_snippet_list()
             self.status_label.setText(f"Status: Deleted snippet '{trigger}' (saved)")
 
+    def _sync_toggle_text(self):
+        """Label the toggle buttons with their state, not just a color.
+
+        Color is a fast glance cue, but text carries the state for
+        accessibility (WCAG 1.4.1: don't rely on color alone)."""
+        self.toggle_daemon_btn.setText(
+            "Daemon: On" if self.toggle_daemon_btn.isChecked() else "Daemon: Off"
+        )
+        self.toggle_writing_btn.setText(
+            "Human Typing: On" if self.toggle_writing_btn.isChecked() else "Human Typing: Off"
+        )
+
     def set_daemon_enabled(self, enabled):
         """Central pause/resume: update daemon state and every UI reflection.
 
@@ -710,12 +724,16 @@ class TexterUI(QMainWindow):
         self.toggle_daemon_btn.blockSignals(True)
         self.toggle_daemon_btn.setChecked(enabled)
         self.toggle_daemon_btn.blockSignals(False)
+        self._sync_toggle_text()
 
         self.tray_icon.setIcon(create_status_icon("green" if enabled else "red"))
         self.tray_icon.setToolTip(f"Texter - {status.capitalize()}")
 
         writing = self.daemon.writing_mode if self.daemon else False
-        self.status_label.setText(f"Status: Daemon: {status}, Human Typing: {writing}")
+        self.status_label.setText(
+            f"Status: Daemon: {status}, Human Typing: "
+            f"{'enabled' if writing else 'disabled'}"
+        )
         print(f"UI: Daemon {status}")
 
     def toggle_pause(self):
@@ -733,13 +751,18 @@ class TexterUI(QMainWindow):
         self.set_daemon_enabled(bool(checked))
 
     def toggle_writing_mode(self, checked):
-        if self.daemon:
-            self.daemon.writing_mode = checked
-            self.status_label.setText(
-                f"Status: Daemon: {'enabled' if self.daemon.enabled else 'paused'}, "
-                f"Human Typing: {'enabled' if checked else 'disabled'}"
-            )
-            print(f"UI: Human typing {'enabled' if checked else 'disabled'}")
+        if not self.daemon:
+            return
+        self.daemon.writing_mode = checked
+        self.toggle_writing_btn.blockSignals(True)
+        self.toggle_writing_btn.setChecked(checked)
+        self.toggle_writing_btn.blockSignals(False)
+        self._sync_toggle_text()
+        self.status_label.setText(
+            f"Status: Daemon: {'enabled' if self.daemon.enabled else 'paused'}, "
+            f"Human Typing: {'enabled' if checked else 'disabled'}"
+        )
+        print(f"UI: Human typing {'enabled' if checked else 'disabled'}")
 
     def quit_button(self):
         """Button handler for manual quit"""
