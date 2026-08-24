@@ -80,6 +80,8 @@ class Daemon:
             "email": "alvaro@example.com",
             # Keyboard layout used by the evdev Wayland listener (input_wayland.py).
             "layout": "us",
+            # Language used for template snippets; persisted so it survives restarts.
+            "language": "python",
         }
         if os.path.exists(self.config_file):
             try:
@@ -88,6 +90,13 @@ class Daemon:
                 print("Loaded user settings from config.json")
             except Exception as e:
                 print("Failed to load config:", e)
+        self.current_language = self.config.get("language", self.current_language)
+
+    def set_language(self, language):
+        """Switch the template language and persist it as the default."""
+        self.current_language = language
+        self.config["language"] = language
+        self.save_config()
 
     def save_config(self):
         try:
@@ -166,7 +175,7 @@ class Daemon:
         action = item.get("action")
 
         if action == "set_language":
-            self.current_language = item.get("value")
+            self.set_language(item.get("value"))
             print("Language switched to:", self.current_language)
 
         elif action == "shutdown":

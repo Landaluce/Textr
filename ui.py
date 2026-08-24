@@ -637,7 +637,8 @@ class TexterUI(QMainWindow):
         self.refresh_snippet_list()
         self.on_selection_changed()
         if self.daemon:
-            self.daemon.current_language = lang
+            # Persists to config.json so the language survives restarts.
+            self.daemon.set_language(lang)
             self.status_label.setText(f"Status: Language switched to {lang}")
             print(f"UI: Language switched to {lang}")
 

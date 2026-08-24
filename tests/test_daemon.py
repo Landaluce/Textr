@@ -413,6 +413,33 @@ class TestTags:
         assert saved["tg"]["tags"] == ["x", "y"]
 
 
+class TestDefaultLanguage:
+    def test_language_loaded_from_config(self, d):
+        d.config["language"] = "javascript"
+        d.save_config()
+
+        reloaded = daemon_mod.Daemon(snippets_file="snippets.json")
+        assert reloaded.current_language == "javascript"
+
+    def test_missing_language_defaults_to_python(self, d):
+        assert d.current_language == "python"
+
+    def test_set_language_persists_to_config(self, d):
+        d.set_language("rust")
+        with open(d.config_file) as f:
+            saved = json.load(f)
+        assert saved["language"] == "rust"
+
+        reloaded = daemon_mod.Daemon(snippets_file="snippets.json")
+        assert reloaded.current_language == "rust"
+
+    def test_set_language_command_persists(self, d):
+        d.run_command({"action": "set_language", "value": "go"})
+        with open(d.config_file) as f:
+            assert json.load(f)["language"] == "go"
+        assert d.current_language == "go"
+
+
 class TestContextVars:
     def test_iso_renders_as_iso8601(self, d):
         rendered = d.render_template("{iso}")
