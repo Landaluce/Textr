@@ -66,6 +66,68 @@ class TestKeyTranslation:
         assert h.on_key(wl.KEY_A, 2) == Key(char="a")
 
 
+class TestLayouts:
+    def test_altgr_on_us_produces_nothing(self):
+        h = wl.WaylandKeyHandler(layout="us")
+        h.on_key(wl.KEY_RIGHTALT, 1)
+        assert h.on_key(wl.KEY_E, 1) is None
+
+    def test_german_qwertz_swaps_y_and_z(self):
+        h = wl.WaylandKeyHandler(layout="de")
+        assert h.on_key(wl.KEY_Y, 1) == Key(char="z")
+        assert h.on_key(wl.KEY_Z, 1) == Key(char="y")
+        h.on_key(wl.KEY_LEFTSHIFT, 1)
+        assert h.on_key(wl.KEY_Y, 1) == Key(char="Z")
+
+    def test_german_umlauts_and_altgr(self):
+        h = wl.WaylandKeyHandler(layout="de")
+        assert h.on_key(wl.KEY_SEMICOLON, 1) == Key(char="ö")
+        assert h.on_key(wl.KEY_LEFTBRACE, 1) == Key(char="ü")
+        h.on_key(wl.KEY_RIGHTALT, 1)
+        assert h.on_key(wl.KEY_E, 1) == Key(char="€")
+        assert h.on_key(wl.KEY_Q, 1) == Key(char="@")
+
+    def test_french_azerty_letter_mapping(self):
+        h = wl.WaylandKeyHandler(layout="fr")
+        assert h.on_key(wl.KEY_Q, 1) == Key(char="a")
+        assert h.on_key(wl.KEY_A, 1) == Key(char="q")
+        assert h.on_key(wl.KEY_SEMICOLON, 1) == Key(char="m")
+        assert h.on_key(wl.KEY_M, 1) == Key(char=",")
+        h.on_key(wl.KEY_LEFTSHIFT, 1)
+        assert h.on_key(wl.KEY_1, 1) == Key(char="1")
+
+    def test_french_altgr_at_sign(self):
+        h = wl.WaylandKeyHandler(layout="fr")
+        h.on_key(wl.KEY_RIGHTALT, 1)
+        assert h.on_key(wl.KEY_0, 1) == Key(char="@")
+        assert h.on_key(wl.KEY_E, 1) == Key(char="€")
+
+    def test_uk_shift_symbols(self):
+        h = wl.WaylandKeyHandler(layout="uk")
+        h.on_key(wl.KEY_LEFTSHIFT, 1)
+        assert h.on_key(wl.KEY_3, 1) == Key(char="£")
+        assert h.on_key(wl.KEY_APOSTROPHE, 1) == Key(char="@")
+
+    def test_spanish_altgr(self):
+        h = wl.WaylandKeyHandler(layout="es")
+        h.on_key(wl.KEY_RIGHTALT, 1)
+        assert h.on_key(wl.KEY_2, 1) == Key(char="@")
+        assert h.on_key(wl.KEY_5, 1) == Key(char="€")
+
+    def test_unknown_layout_falls_back_to_us(self):
+        h = wl.WaylandKeyHandler(layout="xx")
+        assert h.on_key(wl.KEY_A, 1) == Key(char="a")
+
+    def test_right_alt_is_altgr_not_suppressed(self):
+        h = wl.WaylandKeyHandler(layout="de")
+        h.on_key(wl.KEY_RIGHTALT, 1)
+        assert h.on_key(wl.KEY_E, 1) == Key(char="€")  # typed, not suppressed
+
+        h2 = wl.WaylandKeyHandler(layout="us")
+        h2.on_key(wl.KEY_LEFTALT, 1)
+        assert h2.on_key(wl.KEY_A, 1) is None  # left alt still suppresses
+
+
 class TestDeviceFiltering:
     def test_keyboard_devices_accepted(self, monkeypatch):
         monkeypatch.setattr(wl, "ecodes", SimpleNamespace(EV_KEY=1, KEY_A=30))

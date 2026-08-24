@@ -37,6 +37,16 @@ class TestTrayToggle:
         assert d.enabled is True
 
 
+class TestLayoutSetting:
+    def test_layout_combo_defaults_to_config(self, window, d):
+        assert window.layout_combo.currentData() == "us"
+
+    def test_save_settings_persists_layout(self, window, d):
+        window.layout_combo.setCurrentIndex(window.layout_combo.findData("de"))
+        window.save_user_config()
+        assert d.config["layout"] == "de"
+
+
 class TestStateSync:
     def test_buttons_carry_qss_hook_names(self, window):
         assert window.toggle_daemon_btn.objectName() == "toggle_daemon_btn"

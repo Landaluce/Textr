@@ -329,6 +329,39 @@ class TestDataPaths:
         assert daemon._resolve_path("y.json") == "y.json"  # legacy file wins
 
 
+class TestLayoutConfig:
+    def test_config_defaults_to_us_layout(self, d):
+        assert d.config.get("layout") == "us"
+
+    def test_layout_survives_config_round_trip(self, d):
+        d.config["layout"] = "de"
+        d.save_config()
+
+        reloaded = daemon_mod.Daemon(snippets_file="snippets.json")
+        assert reloaded.config["layout"] == "de"
+
+    def test_wayland_listener_gets_config_layout(self, d, monkeypatch):
+        import sys
+
+        d.config["layout"] = "fr"
+        captured = {}
+
+        class FakeListener:
+            def __init__(self, on_key=None, on_hotkey=None, layout="us"):
+                captured["layout"] = layout
+
+            def start(self):
+                return True
+
+        monkeypatch.setitem(
+            sys.modules, "input_wayland",
+            SimpleNamespace(WaylandInputListener=FakeListener),
+        )
+
+        assert d._start_wayland_input() is True
+        assert captured["layout"] == "fr"
+
+
 class TestContextVars:
     def test_iso_renders_as_iso8601(self, d):
         rendered = d.render_template("{iso}")

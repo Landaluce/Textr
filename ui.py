@@ -189,6 +189,7 @@ class TexterUI(QMainWindow):
         if self.daemon:
             self.daemon.config["name"] = self.name_edit.text().strip()
             self.daemon.config["email"] = self.email_edit.text().strip()
+            self.daemon.config["layout"] = self.layout_combo.currentData()
             self.daemon.save_config()
             self.status_label.setText("Status: Settings saved!")
 
@@ -284,10 +285,19 @@ class TexterUI(QMainWindow):
         settings_layout = QFormLayout(settings_group)
         self.name_edit = QLineEdit(self.daemon.config.get("name", "") if (self.daemon and hasattr(self.daemon, "config")) else "")
         self.email_edit = QLineEdit(self.daemon.config.get("email", "") if (self.daemon and hasattr(self.daemon, "config")) else "")
+        # Keyboard layout for the evdev Wayland input listener (used when the
+        # session is native Wayland; ignored under X11).
+        self.layout_combo = QComboBox()
+        current_layout = self.daemon.config.get("layout", "us") if (self.daemon and hasattr(self.daemon, "config")) else "us"
+        for layout in ("us", "uk", "de", "fr", "es"):
+            self.layout_combo.addItem(layout, layout)
+        layout_index = self.layout_combo.findData(current_layout)
+        self.layout_combo.setCurrentIndex(max(layout_index, 0))
         self.save_settings_btn = QPushButton("Save Settings")
         self.save_settings_btn.clicked.connect(self.save_user_config)
         settings_layout.addRow("Name:", self.name_edit)
         settings_layout.addRow("Email:", self.email_edit)
+        settings_layout.addRow("Keyboard layout:", self.layout_combo)
         settings_layout.addRow(self.save_settings_btn)
         right_layout.addWidget(settings_group)
 
