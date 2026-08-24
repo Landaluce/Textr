@@ -49,7 +49,7 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
 - **Trigger conflict warnings**: `TexterUI.trigger_conflicts()` flags duplicate triggers and prefix-deferral collisions when adding/editing snippets (`_confirm_trigger_conflicts` warns before saving)
 - **Import safety**: `import_json()` normalizes legacy list format to the dict format, warns (via a confirm dialog) about triggers it will overwrite, then imports
 - **Per-snippet disable**: `AddSnippetDialog` has an Enabled checkbox (writes `"enabled": false` when unchecked); disabled snippets render dimmed (`DISABLED_COLOR`) in the tree and the preview notes the disabled state
-- **Status label**: transient messages only ("Status: Ready", saved/added/switched); the toggle button text + tray tooltip carry daemon/writing state - do not write state back into the label
+- **No status label**: the status bar was removed; the toggle button text + tray tooltip carry daemon/writing state, and transient feedback (saved/added/imported) goes to the terminal via `print` - keep print-based feedback when changing these flows
 - **Quit paths**: the window's X button (via `closeEvent`), the Quit button, and the tray Quit action all route through `quit_app()` (saves snippets, stops daemon, hides tray) - keep them unified when changing quit behavior
 
 ### Configuration Files

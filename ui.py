@@ -332,7 +332,7 @@ class TexterUI(QMainWindow):
             time_fmt = self.time_format_edit.text().strip()
             self.daemon.config["time_format"] = time_fmt or "%H:%M"
             self.daemon.save_config()
-            self.status_label.setText("Status: Settings saved!")
+            print("UI: Settings saved")
 
     def poll_daemon_status(self):
         if not self.daemon:
@@ -350,7 +350,7 @@ class TexterUI(QMainWindow):
             self.language_combo.blockSignals(False)
             self.refresh_snippet_list()
             self.on_selection_changed()
-            self.status_label.setText(f"Status: Language switched to {self.daemon.current_language}")
+            print(f"UI: Programming language switched to {self.daemon.current_language}")
 
     def setup_ui(self):
         self.setWindowTitle("Texter - Snippet Manager")
@@ -495,9 +495,6 @@ class TexterUI(QMainWindow):
         settings_layout.addRow(self.save_settings_btn)
         right_layout.addWidget(settings_group)
 
-        # Status (transient messages only; the toggle buttons carry the state)
-        self.status_label = QLabel("Status: Ready")
-        right_layout.addWidget(self.status_label)
 
         # Buttons
         action_layout = QHBoxLayout()
@@ -770,7 +767,7 @@ class TexterUI(QMainWindow):
         if self.daemon:
             self.daemon.set_category(category)
         self.refresh_snippet_list()
-        self.status_label.setText(f"Status: Showing {category} snippets")
+        print(f"UI: Showing {category} snippets")
 
     def on_selection_changed(self):
         selected = self.snippet_list.selectedItems()
@@ -807,7 +804,6 @@ class TexterUI(QMainWindow):
         if self.daemon:
             # Persists to config.json so the language survives restarts.
             self.daemon.set_language(lang)
-            self.status_label.setText(f"Status: Programming language switched to {lang}")
             print(f"UI: Programming language switched to {lang}")
 
     def hide_window(self):
@@ -876,7 +872,7 @@ class TexterUI(QMainWindow):
                     return
                 self.daemon.add_or_update_snippet(trigger, snippet)
                 self.refresh_snippet_list()
-                self.status_label.setText(f"Status: Added snippet '{trigger}' (saved)")
+                print(f"UI: Added snippet '{trigger}' (saved)")
 
     def edit_snippet(self):
         selected = self.snippet_list.selectedItems()
@@ -898,7 +894,7 @@ class TexterUI(QMainWindow):
                     return
                 self.daemon.replace_snippet(trigger, new_trigger, new_snippet)
                 self.refresh_snippet_list()
-                self.status_label.setText(f"Status: Edited snippet '{new_trigger}' (saved)")
+                print(f"UI: Edited snippet '{new_trigger}' (saved)")
 
     def delete_snippet(self):
         selected = self.snippet_list.selectedItems()
@@ -912,7 +908,7 @@ class TexterUI(QMainWindow):
         if reply == QMessageBox.Yes:
             self.daemon.delete_snippet(trigger)
             self.refresh_snippet_list()
-            self.status_label.setText(f"Status: Deleted snippet '{trigger}' (saved)")
+            print(f"UI: Deleted snippet '{trigger}' (saved)")
 
     def _sync_toggle_text(self):
         """Label the toggle buttons with their state, not just a color.
@@ -1018,9 +1014,7 @@ class TexterUI(QMainWindow):
                         return
                 self.daemon.import_snippets(snippets)
                 self.refresh_snippet_list()
-                self.status_label.setText(
-                    f"Status: Imported {len(snippets)} snippets (saved)"
-                )
+                print(f"UI: Imported {len(snippets)} snippets (saved)")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to import: {e}")
 
@@ -1035,6 +1029,6 @@ class TexterUI(QMainWindow):
                     snapshot = {}
                 with open(file_path, "w") as f:
                     json.dump(snapshot, f, indent=2)
-                self.status_label.setText(f"Status: Exported snippets to {file_path}")
+                print(f"UI: Exported snippets to {file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to export: {e}")
