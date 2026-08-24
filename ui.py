@@ -2,7 +2,6 @@
 import sys
 import json
 import threading
-from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QTextEdit, QPushButton, QComboBox,
@@ -155,12 +154,6 @@ class TexterUI(QMainWindow):
             self.hide_window()
         elif action == "refresh":
             self.refresh_snippet_list()
-        elif action == "insert_date":
-            self.insert_text(datetime.now().strftime("%Y-%m-%d"))
-        elif action == "insert_time":
-            self.insert_text(datetime.now().strftime("%H:%M"))
-        elif action == "insert_datetime":
-            self.insert_text(datetime.now().strftime("%Y-%m-%d %H:%M"))
         elif action == "restart":
             self.restart_app()
         elif action == "sync_writing_mode":
@@ -441,21 +434,15 @@ class TexterUI(QMainWindow):
 
         trigger = selected[0].data(Qt.UserRole)
         snippet = self.daemon.snippets.get(trigger)
-
-        if snippet and snippet.get("type") == "template":
-            langs = snippet.get("languages", {})
-            current_lang = self.language_combo.currentText()
-            preview = langs.get(current_lang, f"No preview for {current_lang}")
-            self.preview_text.setText(preview)
-        else:
+        if not snippet:
             self.preview_text.clear()
-        
-        if snippet:
-            preview = self.get_expansion_preview(snippet)
-            snippet_category = snippet.get("category", "uncategorized")
-            snippet_type = snippet.get("type", "variable")
-            
-            self.preview_text.setText(f"Category: {snippet_category}\nType: {snippet_type}\nTrigger: {trigger}\n\nExpands to:\n{preview}")
+            return
+
+        preview = self.get_expansion_preview(snippet)
+        snippet_category = snippet.get("category", "uncategorized")
+        snippet_type = snippet.get("type", "variable")
+
+        self.preview_text.setText(f"Category: {snippet_category}\nType: {snippet_type}\nTrigger: {trigger}\n\nExpands to:\n{preview}")
 
     def on_language_changed(self, lang):
         self.refresh_snippet_list()
@@ -465,22 +452,8 @@ class TexterUI(QMainWindow):
             self.status_label.setText(f"Status: Language switched to {lang}")
             print(f"UI: Language switched to {lang}")
 
-    def bring_to_front(self):
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-        self.show()
-        self.raise_()
-        self.activateWindow()
-        QTimer.singleShot(200, self._clear_always_on_top)
-
-    def _clear_always_on_top(self):
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
-        self.show()
-
     def hide_window(self):
         self.hide()
-
-    def insert_text(self, text):
-        self.preview_text.insertPlainText(text)
 
     def bring_to_front(self):
         self.show()
@@ -600,8 +573,13 @@ class TexterUI(QMainWindow):
         file_path, _ = QFileDialog.getSaveFileName(self, "Export Snippets", "", "JSON Files (*.json)")
         if file_path:
             try:
+                if self.daemon:
+                    with self.daemon.snippets_lock:
+                        snapshot = dict(self.daemon.snippets)
+                else:
+                    snapshot = {}
                 with open(file_path, "w") as f:
-                    json.dump(self.daemon.snippets, f, indent=2)
+                    json.dump(snapshot, f, indent=2)
                 self.status_label.setText(f"Status: Exported snippets to {file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to export: {e}")

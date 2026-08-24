@@ -10,3 +10,8 @@ snippets.json
 my_logs.log
 nohup.out
 somefile
+
+# Packaging artifacts
+build/
+dist/
+*.egg-info/

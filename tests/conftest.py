@@ -50,6 +50,8 @@ def type_string(d, text):
 @pytest.fixture
 def d(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    # Keep all data files inside the test dir, never the real ~/.config.
+    monkeypatch.setenv("TEXTR_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(daemon_mod.keyboard, "Controller", FakeController)
     monkeypatch.setattr(daemon_mod, "pyperclip", FakeClipboard())
     monkeypatch.setattr(daemon_mod.time, "sleep", lambda seconds: None)

@@ -3,7 +3,8 @@ import re
 import threading
 from types import SimpleNamespace
 
-from conftest import type_string
+import daemon as daemon_mod
+from conftest import FakeClipboard, FakeController, type_string
 from pynput import keyboard
 
 
@@ -94,11 +95,10 @@ class TestMatching:
         assert d.buffer == ""
 
     def test_command_fires_even_when_paused(self, d):
-        ui = FakeUI()
-        d.ui = ui
         d.enabled = False
         type_string(d, " :d")
-        assert ui.daemon_command.sent == ["insert_date"]
+        # The date is typed into the active window, not routed to the UI.
+        assert re.match(r"^\d{4}-\d{2}-\d{2}$", daemon_mod.pyperclip.paste())
         assert len(d.controller.backspaces()) == len(":d")
 
 
@@ -107,9 +107,6 @@ class TestCommandRouting:
         ui = FakeUI()
         d.ui = ui
 
-        d.run_command({"action": "date"})
-        d.run_command({"action": "time"})
-        d.run_command({"action": "datetime"})
         d.run_command({"action": "ui"})
         d.run_command({"action": "top"})
         d.run_command({"action": "hide"})
@@ -117,7 +114,6 @@ class TestCommandRouting:
         d.run_command({"action": "restart"})
 
         assert ui.daemon_command.sent == [
-            "insert_date", "insert_time", "insert_datetime",
             "ui", "top", "hide", "refresh", "restart",
         ]
 
@@ -147,11 +143,11 @@ class TestSnippetHelpers:
             saved = json.load(f)
         assert "new2" not in saved
 
-    def test_import_snippets_thread_safe_and_unsaved(self, d):
+    def test_import_snippets_thread_safe_and_persisted(self, d):
         d.import_snippets({"imp": {"type": "variable", "value": "x"}})
         assert "imp" in d.snippets
         with open(d.snippets_file) as f:
-            assert "imp" not in json.load(f)
+            assert json.load(f)["imp"]["value"] == "x"
 
     def test_get_by_category_returns_snapshot(self, d):
         all_snippets = d.get_snippets_by_category("all")
@@ -168,6 +164,169 @@ class TestDefensiveLookup:
     def test_template_without_languages_returns_none(self, d):
         d.add_or_update_snippet("nolangs", {"type": "template"})
         assert d.is_valid_trigger("nolangs") is None
+
+
+class TestTextInsertingCommands:
+    def test_time_command_expands_in_active_window(self, d):
+        d.add_or_update_snippet(":t", {"type": "command", "action": "time"})
+
+        type_string(d, " :t")
+
+        assert re.match(r"^\d{2}:\d{2}$", daemon_mod.pyperclip.paste())
+
+    def test_datetime_command_expands_in_active_window(self, d):
+        # ':dt' collides with the fixture's ':d' prefix; the longer trigger
+        # must win (see TestPrefixTriggers).
+        d.add_or_update_snippet(":dt", {"type": "command", "action": "datetime"})
+
+        type_string(d, " :dt")
+
+        assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", daemon_mod.pyperclip.paste())
+        assert len(d.controller.backspaces()) == len(":dt")
+
+
+class TestCursorPlaceholder:
+    def test_cursor_moves_caret_back_after_expansion(self, d):
+        d.add_or_update_snippet("cur", {"type": "variable", "value": "if {cursor} else {}"})
+
+        type_string(d, " cur")
+
+        # Text is pasted with the {cursor} marker removed...
+        assert daemon_mod.pyperclip.paste() == "if  else {}"
+        # ...and the caret is moved back by the length of the text after it.
+        lefts = [
+            k for action, k in d.controller.events
+            if action == "press" and k == keyboard.Key.left
+        ]
+        assert len(lefts) == len(" else {}")
+
+    def test_expansion_without_cursor_does_not_move_caret(self, d):
+        type_string(d, " sig")
+        lefts = [
+            k for action, k in d.controller.events
+            if action == "press" and k == keyboard.Key.left
+        ]
+        assert lefts == []
+
+    def test_cursor_var_renders_literal_in_templates(self, d):
+        assert d.render_template("a{cursor}b") == "a{cursor}b"
+
+
+class TestPrefixTriggers:
+    """A trigger that is the prefix of another is deferred until disambiguated."""
+
+    def _add_datetime(self, d):
+        d.add_or_update_snippet(":dt", {"type": "command", "action": "datetime"})
+
+    def test_longer_trigger_wins_after_deferral(self, d):
+        self._add_datetime(d)
+
+        type_string(d, " :dt")
+
+        assert re.match(
+            r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", daemon_mod.pyperclip.paste()
+        )
+        assert len(d.controller.backspaces()) == len(":dt")
+
+    def test_prefix_fires_on_boundary_char(self, d):
+        self._add_datetime(d)
+
+        type_string(d, " :d ")
+
+        assert re.match(r"^\d{4}-\d{2}-\d{2}$", daemon_mod.pyperclip.paste())
+        assert len(d.controller.backspaces()) == len(":d")
+
+    def test_prefix_fires_on_boundary_key(self, d):
+        self._add_datetime(d)
+
+        type_string(d, " :d")
+        d.on_press(keyboard.Key.enter)
+
+        assert re.match(r"^\d{4}-\d{2}-\d{2}$", daemon_mod.pyperclip.paste())
+
+    def test_broken_prefix_aborts_without_expansion(self, d):
+        self._add_datetime(d)
+        before = len(d.controller.backspaces())
+
+        type_string(d, " :da")  # ':da' can never become ':dt'
+
+        assert len(d.controller.backspaces()) == before
+        assert d.pending_trigger is None
+
+    def test_unrelated_trigger_unaffected_by_prefix(self, d):
+        self._add_datetime(d)
+        before = len(d.controller.backspaces())
+
+        type_string(d, " sig")
+
+        assert len(d.controller.backspaces()) - before == len("sig")
+
+
+class TestNormalizedKeys:
+    """The core handler accepts backend-agnostic Key objects (from evdev)."""
+
+    def test_key_chars_expand_like_pynput(self, d):
+        from keys import Key
+
+        for ch in " sig":
+            d.on_press(Key(char=ch))
+        assert len(d.controller.backspaces()) == len("sig")
+
+    def test_backspace_by_name_pops_buffer(self, d):
+        from keys import Key
+
+        d.on_press(Key(char="x"))
+        d.on_press(Key(name="backspace"))
+        assert d.buffer == ""
+
+    def test_special_key_by_name_resets_buffer(self, d):
+        from keys import Key
+
+        d.on_press(Key(char="a"))
+        d.on_press(Key(name="enter"))
+        assert d.buffer == ""
+
+
+class TestDataPaths:
+    def test_xdg_fallback_without_legacy_file(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("TEXTR_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        monkeypatch.setattr(daemon_mod.keyboard, "Controller", FakeController)
+        monkeypatch.setattr(daemon_mod, "pyperclip", FakeClipboard())
+        monkeypatch.setattr(daemon_mod.time, "sleep", lambda seconds: None)
+
+        daemon = daemon_mod.Daemon(snippets_file="snippets.json")
+
+        assert daemon.snippets_file == str(tmp_path / "cfg" / "textr" / "snippets.json")
+        assert daemon.config_file == str(tmp_path / "cfg" / "textr" / "config.json")
+
+    def test_snippets_persist_to_xdg_dir(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("TEXTR_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        monkeypatch.setattr(daemon_mod.keyboard, "Controller", FakeController)
+        monkeypatch.setattr(daemon_mod, "pyperclip", FakeClipboard())
+        monkeypatch.setattr(daemon_mod.time, "sleep", lambda seconds: None)
+
+        daemon = daemon_mod.Daemon(snippets_file="snippets.json")
+        daemon.add_or_update_snippet("k", {"type": "variable", "value": "v"})
+
+        path = tmp_path / "cfg" / "textr" / "snippets.json"
+        assert path.exists()
+        assert json.loads(path.read_text())["k"]["value"] == "v"
+
+    def test_resolve_path_precedence(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("TEXTR_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        daemon = daemon_mod.Daemon.__new__(daemon_mod.Daemon)
+
+        assert daemon._resolve_path("/abs/x.json") == "/abs/x.json"
+        assert daemon._resolve_path("x.json") == str(tmp_path / "cfg" / "textr" / "x.json")
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "y.json").write_text("{}")
+        assert daemon._resolve_path("y.json") == "y.json"  # legacy file wins
 
 
 class TestContextVars:

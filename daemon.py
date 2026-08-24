@@ -6,7 +6,9 @@ import json
 import os
 import random
 import math
+import shutil
 import string
+import subprocess
 import threading
 import traceback
 from pynput import keyboard
@@ -22,29 +24,57 @@ class Daemon:
         self.running = True
         self.enabled = True
         self.is_expanding = False
+        # Native Wayland sessions can't use pynput's X11 backend; typing
+        # output then falls back to ydotool (see _wayland_replace).
+        self.wayland = self.is_wayland()
         self.current_language = "python"
         self.listener = None
         self.hotkey_listener = None
+        self.wayland_input = None
         self.controller = keyboard.Controller()
-        self.snippets_file = snippets_file
+        self.snippets_file = self._resolve_path(snippets_file)
         self.snippets = {}
         # Guards all access to self.snippets: the UI thread mutates it while
         # the keyboard listener iterates it on every keystroke.
         self.snippets_lock = threading.RLock()
-        # Keys that invalidate the typed buffer (cursor jumps, line edits...)
-        # Compared by identity: pynput key objects are not reliably hashable.
-        self.buffer_reset_keys = (
-            keyboard.Key.enter, keyboard.Key.tab, keyboard.Key.esc,
-            keyboard.Key.delete, keyboard.Key.home, keyboard.Key.end,
-            keyboard.Key.page_up, keyboard.Key.page_down,
-            keyboard.Key.up, keyboard.Key.down,
-            keyboard.Key.left, keyboard.Key.right,
-        )
+        # Keys that invalidate the typed buffer (cursor jumps, line edits...).
+        # Normalized names shared by the pynput and evdev backends.
+        self.buffer_reset_names = {
+            "enter", "tab", "esc", "delete", "home", "end",
+            "page_up", "page_down", "up", "down", "left", "right",
+        }
+        # When the buffer ends with a trigger that is also the prefix of a
+        # longer trigger (:d vs :dt), expansion is deferred until the next key
+        # reveals which one the user meant (see _handle_key).
+        self.pending_trigger = None
+        self.pending_buffer_len = 0
         self.load_snippets()
         self.load_config()
 
+    def _resolve_path(self, filename):
+        """Locate a data file, preferring XDG config with a legacy fallback.
+
+        Precedence: absolute paths and the TEXTR_CONFIG_DIR override (used by
+        tests) win; otherwise a file already present next to the working
+        directory (legacy source-tree layout) is used as-is; otherwise the
+        file lives under $XDG_CONFIG_HOME/textr (created on demand).
+        """
+        if os.path.isabs(filename):
+            return filename
+        override = os.environ.get("TEXTR_CONFIG_DIR")
+        if override:
+            return os.path.join(override, filename)
+        if os.path.exists(filename):
+            return filename
+        xdg_config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+            os.path.expanduser("~"), ".config"
+        )
+        config_dir = os.path.join(xdg_config, "textr")
+        os.makedirs(config_dir, exist_ok=True)
+        return os.path.join(config_dir, filename)
+
     def load_config(self):
-        self.config_file = "config.json"
+        self.config_file = self._resolve_path("config.json")
         self.config = {"name": "Alvaro", "email": "alvaro@example.com"}
         if os.path.exists(self.config_file):
             try:
@@ -117,6 +147,7 @@ class Daemon:
     def import_snippets(self, snippets):
         with self.snippets_lock:
             self.snippets.update(snippets)
+        self.save_snippets()
 
     def run_command(self, item):
         action = item.get("action")
@@ -129,8 +160,7 @@ class Daemon:
             print("Shutting down Texter daemon...")
             self.running = False
             self.save_snippets()
-            if self.listener:
-                self.listener.stop()
+            self._stop_input()
             
             # Signal UI to quit if it exists
             if hasattr(self, 'ui') and self.ui:
@@ -164,18 +194,6 @@ class Daemon:
             self.save_config()
             print("Saved snippets and config")
 
-        elif action == "date":
-            if hasattr(self, "ui") and self.ui:
-                self.ui.daemon_command.emit("insert_date")
-
-        elif action == "time":
-            if hasattr(self, "ui") and self.ui:
-                self.ui.daemon_command.emit("insert_time")
-
-        elif action == "datetime":
-            if hasattr(self, "ui") and self.ui:
-                self.ui.daemon_command.emit("insert_datetime")
-
         elif action == "top":
             if hasattr(self, "ui") and self.ui:
                 self.ui.daemon_command.emit("top")
@@ -198,8 +216,7 @@ class Daemon:
         print("Daemon: Quitting application...")
         self.running = False
         self.save_snippets()
-        if self.listener:
-            self.listener.stop()
+        self._stop_input()
         import sys
         sys.exit(0)
 
@@ -253,6 +270,17 @@ class Daemon:
         return re.sub(r"\{(\w+)\}", replace_var, text)
 
     def replace(self, trigger, expansion):
+        # {cursor} marks where the caret should end up: the text after it is
+        # typed/pasted first, then the caret is moved back to that position.
+        parts = expansion.split("{cursor}", 1)
+        if len(parts) == 2:
+            before, after = parts
+            final_text = before + after
+            move_back = len(after)
+        else:
+            final_text = expansion
+            move_back = 0
+
         old_clipboard = ""
         try:
             old_clipboard = pyperclip.paste()
@@ -263,34 +291,43 @@ class Daemon:
             self.is_expanding = True
             time.sleep(0.03)
 
-            # Delete the trigger with human-like backspace timing
-            for _ in range(len(trigger)):
-                self.controller.press(keyboard.Key.backspace)
-                self.controller.release(keyboard.Key.backspace)
-                time.sleep(random.uniform(0.04, 0.12))  # variable backspace speed
-
-            time.sleep(random.uniform(0.08, 0.25))  # natural pause before typing
-
-            if self.writing_mode:
-                self._type_humanlike(expansion)
+            if self.wayland:
+                self._wayland_replace(trigger, final_text, move_back)
             else:
-                # Paste mode with jitter
-                pyperclip.copy(expansion)
-                time.sleep(random.uniform(0.05, 0.09))
-                self.controller.press(keyboard.Key.shift)
-                self.controller.press(keyboard.Key.ctrl)
-                self.controller.press("v")
-                self.controller.release("v")
-                self.controller.release(keyboard.Key.ctrl)
-                self.controller.release(keyboard.Key.shift)
-                time.sleep(random.uniform(0.3, 0.8))
+                # Delete the trigger with human-like backspace timing
+                for _ in range(len(trigger)):
+                    self.controller.press(keyboard.Key.backspace)
+                    self.controller.release(keyboard.Key.backspace)
+                    time.sleep(random.uniform(0.04, 0.12))  # variable backspace speed
 
-            # Restore original clipboard
-            if old_clipboard:
-                try:
-                    pyperclip.copy(old_clipboard)
-                except Exception:
-                    pass
+                time.sleep(random.uniform(0.08, 0.25))  # natural pause before typing
+
+                if self.writing_mode:
+                    self._type_humanlike(final_text)
+                else:
+                    # Paste mode with jitter
+                    pyperclip.copy(final_text)
+                    time.sleep(random.uniform(0.05, 0.09))
+                    self.controller.press(keyboard.Key.shift)
+                    self.controller.press(keyboard.Key.ctrl)
+                    self.controller.press("v")
+                    self.controller.release("v")
+                    self.controller.release(keyboard.Key.ctrl)
+                    self.controller.release(keyboard.Key.shift)
+                    time.sleep(random.uniform(0.3, 0.8))
+
+                # Move the caret back to the {cursor} position
+                for _ in range(move_back):
+                    self.controller.press(keyboard.Key.left)
+                    self.controller.release(keyboard.Key.left)
+                    time.sleep(0.02)
+
+                # Restore original clipboard
+                if old_clipboard:
+                    try:
+                        pyperclip.copy(old_clipboard)
+                    except Exception:
+                        pass
 
         except Exception as e:
             print("REPLACE ERROR:", repr(e))
@@ -298,6 +335,64 @@ class Daemon:
         finally:
             self.buffer = ""
             self.is_expanding = False
+
+    @staticmethod
+    def is_wayland():
+        """Detect a native Wayland session (pynput's backend is X11-only)."""
+        return (
+            os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+            or bool(os.environ.get("WAYLAND_DISPLAY"))
+        )
+
+    def _ydotool_available(self):
+        """Check (once) whether the ydotool client is installed."""
+        if not hasattr(self, "_ydotool_checked"):
+            self._ydotool_checked = True
+            self._ydotool_ok = shutil.which("ydotool") is not None
+            if not self._ydotool_ok:
+                print("ydotool not found: Wayland typing output will not work.")
+                print("Install the ydotool daemon: https://github.com/ReimuNotMoe/ydotool")
+        return self._ydotool_ok
+
+    def _wayland_run(self, args):
+        """Run a ydotool command, logging failures once instead of spamming."""
+        try:
+            result = subprocess.run(args, capture_output=True, text=True)
+            if result.returncode != 0 and not getattr(self, "_wayland_err_printed", False):
+                self._wayland_err_printed = True
+                print(f"ydotool error ({' '.join(args)}): {result.stderr.strip()}")
+        except Exception as e:
+            print("ydotool failed:", e)
+
+    def _press_backspace(self):
+        """Delete one character, using the backend appropriate to the session."""
+        if self.wayland:
+            self._wayland_run(["ydotool", "key", "14"])  # KEY_BACKSPACE
+        else:
+            self.controller.press(keyboard.Key.backspace)
+            self.controller.release(keyboard.Key.backspace)
+
+    def _wayland_replace(self, trigger, final_text, move_back):
+        """Best-effort output on Wayland via ydotool.
+
+        pynput cannot capture global keys on native Wayland, so trigger
+        detection only works for XWayland apps. When it does fire, use
+        ydotool to type instead of the X11 controller + clipboard."""
+        if not self._ydotool_available():
+            print("REPLACE ERROR: cannot type on Wayland (ydotool missing)")
+            return
+
+        for _ in range(len(trigger)):
+            self._press_backspace()
+            time.sleep(random.uniform(0.04, 0.12))
+
+        time.sleep(random.uniform(0.08, 0.25))
+
+        self._wayland_run(["ydotool", "type", "--key-delay", "12", final_text])
+
+        for _ in range(move_back):
+            self._wayland_run(["ydotool", "key", "105"])  # KEY_LEFT
+            time.sleep(0.02)
 
 
     def _type_humanlike(self, text):
@@ -455,10 +550,19 @@ class Daemon:
         item_type = item.get("type")
 
         if item_type == "command":
+            action = item.get("action")
+            if action in ("date", "time", "datetime"):
+                # Text-inserting commands expand in the active window like a
+                # normal snippet instead of routing through the manager UI.
+                fmt = {
+                    "date": "%Y-%m-%d",
+                    "time": "%H:%M",
+                    "datetime": "%Y-%m-%d %H:%M",
+                }[action]
+                return datetime.now().strftime(fmt)
             self.run_command(item)
             for _ in range(len(trigger)):
-                self.controller.press(keyboard.Key.backspace)
-                self.controller.release(keyboard.Key.backspace)
+                self._press_backspace()
             return None
 
         if item_type == "variable":
@@ -473,8 +577,9 @@ class Daemon:
         return None
 
     def on_press(self, key):
-        # Never let an exception escape into the pynput listener thread:
-        # that would silently kill the listener and stop all trigger detection.
+        # Never let an exception escape into an input-backend thread (pynput
+        # listener or evdev reader): that would silently kill the listener and
+        # stop all trigger detection.
         try:
             return self._handle_key(key)
         except Exception:
@@ -482,27 +587,101 @@ class Daemon:
             traceback.print_exc()
             return True
 
+    BOUNDARY_CHARS = ' \t\n.,;:!?"\'()-_[]{}<>/\\'
+
+    def _is_trigger_complete(self, buffer, trigger):
+        """True if `buffer` ends with `trigger` starting at a word boundary."""
+        if not buffer.endswith(trigger):
+            return False
+        if len(buffer) == len(trigger):
+            return True  # just typed the trigger
+        return buffer[-(len(trigger) + 1)] in self.BOUNDARY_CHARS
+
+    def _has_longer_prefix(self, trigger):
+        """True if a longer trigger starts with `trigger` (prefix collision)."""
+        with self.snippets_lock:
+            for other in self.snippets.keys():
+                if len(other) > len(trigger) and other.startswith(trigger):
+                    return True
+        return False
+
+    def _pending_extends(self, extra):
+        """Can the deferred trigger still grow into a longer trigger?
+
+        `extra` is everything the user typed after the deferred trigger; the
+        deferred trigger only survives if a longer trigger starts with
+        trigger + extra.
+        """
+        candidate = self.pending_trigger + extra
+        with self.snippets_lock:
+            for other in self.snippets.keys():
+                if len(other) > len(self.pending_trigger) and other.startswith(candidate):
+                    return True
+        return False
+
+    def _expand(self, trigger):
+        """Resolve and expand `trigger` if it yields text; buffer is cleared."""
+        with self.snippets_lock:
+            item = self.snippets.get(trigger)
+
+        if item is None:
+            self.buffer = ""
+            return True
+
+        # Commands always work, even when paused (e.g. :resume, :quit).
+        if item.get("type") == "command":
+            expansion = self.is_valid_trigger(trigger)
+            if expansion is not None:
+                self.replace(trigger, expansion)
+            return True
+
+        # Non-commands only expand when not paused.
+        if not self.enabled:
+            self.buffer = ""
+            return True
+
+        expansion = self.is_valid_trigger(trigger)
+        if expansion is not None:
+            self.replace(trigger, expansion)
+        return True
+
+    def _fire_pending(self):
+        """Expand the deferred trigger (a boundary key or char completed it)."""
+        trigger = self.pending_trigger
+        self.pending_trigger = None
+        if trigger is not None:
+            self._expand(trigger)
+
     def _handle_key(self, key):
         if self.debugging and self.debug:
-            print(f"DEBUG: Key pressed: {key}, Buffer: '{self.buffer}'")   
+            print(f"DEBUG: Key pressed: {key}, Buffer: '{self.buffer}'")
 
         if self.is_expanding:
             return True
 
-        if key == keyboard.Key.backspace:
+        name = getattr(key, "name", None)
+        char = getattr(key, "char", None)
+
+        if name == "backspace":
+            # Deleting breaks a deferred trigger just like the buffer.
+            self.pending_trigger = None
             self.buffer = self.buffer[:-1]
             return True
 
-        if any(key is reset_key for reset_key in self.buffer_reset_keys):
-            self.buffer = ""
-            return True
-
-        try:
-            char = key.char
-        except AttributeError:
+        if name is not None:
+            if self.pending_trigger is not None and name in self.buffer_reset_names:
+                # A boundary key (Enter, Tab...) finishes the deferred word.
+                self._fire_pending()
+            elif name in self.buffer_reset_names:
+                self.buffer = ""
             return True
 
         if not char:
+            return True
+
+        # A boundary character finishes the deferred word -> fire it now.
+        if self.pending_trigger is not None and char in self.BOUNDARY_CHARS:
+            self._fire_pending()
             return True
 
         self.buffer += char
@@ -511,43 +690,28 @@ class Daemon:
         with self.snippets_lock:
             sorted_triggers = sorted(self.snippets.keys(), key=len, reverse=True)
 
-        def is_trigger_complete(buffer, trigger):
-            if not buffer.endswith(trigger):
-                return False
-            # Check that the character before the trigger is a word boundary
-            if len(buffer) == len(trigger):
-                return True  # Just typed the trigger
-            preceding_char = buffer[-(len(trigger) + 1)]
-            return preceding_char in ' \t\n.,;:!?"\'()-_[]{}<>/\\'
-
-        # Check for triggers BEFORE checking if paused
-        # This allows commands like :resume and :quit to work even when paused
+        # Only one trigger can complete at a time (the buffer ends with it), so
+        # the first (longest) match wins.
+        completed = None
         for trigger in sorted_triggers:
-            if is_trigger_complete(self.buffer, trigger):
-                with self.snippets_lock:
-                    item = self.snippets.get(trigger)
+            if self._is_trigger_complete(self.buffer, trigger):
+                completed = trigger
+                break
 
-                if item is None:
-                    return True
-
-                # Always allow commands to work (even when paused)
-                if item.get("type") == "command":
-                    expansion = self.is_valid_trigger(trigger)
-                    if expansion is not None:
-                        self.replace(trigger, expansion)
-                    return True
-                
-                # For non-commands, only expand if not paused
-                if not self.enabled:
-                    # Clear buffer and ignore when paused
-                    self.buffer = ""
-                    return True
-                
-                # Normal expansion when enabled
-                expansion = self.is_valid_trigger(trigger)
-                if expansion is not None:
-                    self.replace(trigger, expansion)
+        if completed is not None:
+            if self._has_longer_prefix(completed):
+                # Wait: the user might be typing a longer trigger (:dt after :d).
+                self.pending_trigger = completed
+                self.pending_buffer_len = len(self.buffer)
                 return True
+            return self._expand(completed)
+
+        if self.pending_trigger is not None:
+            extra = self.buffer[self.pending_buffer_len:]
+            if not self._pending_extends(extra):
+                # e.g. ':d' followed by 'a' when only ':dt' could continue:
+                # the deferred trigger is broken, not complete - drop it.
+                self.pending_trigger = None
 
         return True
 
@@ -555,9 +719,36 @@ class Daemon:
         self.enabled = not self.enabled
         print("Global hotkey triggered: Texter enabled =", self.enabled)
 
+    def _start_wayland_input(self):
+        """Start evdev input capture on Wayland. Returns True on success."""
+        try:
+            from input_wayland import WaylandInputListener
+        except ImportError:
+            print("input_wayland not importable: Wayland capture unavailable.")
+            return False
+        self.wayland_input = WaylandInputListener(
+            on_key=self.on_press,
+            on_hotkey=self.toggle_pause_via_hotkey,
+        )
+        return self.wayland_input.start()
+
     def run(self):
-        print("Texter daemon running (X11 mode)")
-        
+        if self.wayland:
+            print("Wayland session detected: capturing input via evdev and")
+            print("typing output via ydotool (pynput is X11-only).")
+            self._ydotool_available()
+            if self._start_wayland_input():
+                print("Texter daemon running (Wayland + evdev mode)")
+                while self.running:
+                    time.sleep(1)
+            else:
+                print("Falling back to pynput: trigger detection limited to XWayland apps.")
+                self._run_pynput()
+        else:
+            print("Texter daemon running (X11 mode)")
+            self._run_pynput()
+
+    def _run_pynput(self):
         # Register global hotkey listener
         try:
             self.hotkey_listener = keyboard.GlobalHotKeys({
@@ -584,15 +775,27 @@ class Daemon:
                 continue
             break
 
-    def stop(self):
-        self.running = False
-        self.save_snippets()  # Save before stopping
+    def _stop_input(self):
+        """Stop every active input backend (pynput and/or evdev)."""
         if self.listener:
-            self.listener.stop()
+            try:
+                self.listener.stop()
+            except Exception:
+                pass
         if self.hotkey_listener:
             try:
                 self.hotkey_listener.stop()
             except Exception:
                 pass
+        if getattr(self, "wayland_input", None):
+            try:
+                self.wayland_input.stop()
+            except Exception:
+                pass
+
+    def stop(self):
+        self.running = False
+        self.save_snippets()  # Save before stopping
+        self._stop_input()
 
     

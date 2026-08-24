@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "textr"
+version = "0.1.0"
+description = "Text snippet expansion daemon with a system-tray UI for Linux (X11 and Wayland)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["text-expansion", "snippets", "productivity", "wayland", "x11"]
+dependencies = [
+    "PySide6>=6.6",
+    "pynput>=1.7",
+    "pyperclip>=1.9",
+    "evdev>=1.6; sys_platform == 'linux'",
+]
+
+[project.scripts]
+textr = "main:main"
+
+[tool.setuptools]
+py-modules = ["daemon", "ui", "main", "stylesheet", "keys", "input_wayland"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
