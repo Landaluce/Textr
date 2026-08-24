@@ -105,8 +105,12 @@ Data files are looked up in this order:
 2. a file already present next to the working directory (legacy source-tree layout)
 3. `$XDG_CONFIG_HOME/textr/` (defaults to `~/.config/textr/`), created on demand
 
-- `config.json` — user profile (`name`, `email`)
+- `config.json` — user profile (`name`, `email`, `layout`, `language`, `paste_hotkey`)
 - `snippets.json` — all snippet definitions
+
+The paste shortcut used in clipboard mode defaults to `Ctrl+Shift+V` and is configurable
+via **Settings → Paste shortcut** (e.g. `ctrl+insert`); if a terminal swallows the paste,
+change it there rather than editing the config by hand.
 
 They are personal data and are excluded from version control via `.gitignore`.
 
@@ -114,6 +118,8 @@ They are personal data and are excluded from version control via `.gitignore`.
 
 ```bash
 python3 -m pytest tests/
+python3 -m diag              # environment report (devices, tools, permissions)
+python3 -m diag --listen 5   # + live keycode capture under the selected layout
 ```
 
 The test suite exercises the daemon without X11: the keyboard controller, clipboard, and sleeps are faked, so it runs headless in CI.
@@ -139,5 +145,6 @@ Threading rules that keep the daemon alive:
 
 - **Triggers not expanding** — the daemon may be paused: press `Ctrl+Shift+P` once, or check the Daemon button/status label in the Texter window.
 - **Nothing happens on Wayland** — check the terminal output: Textr prints why capture or output failed. Likely causes: your user isn't in the `input` group (evdev capture), `python-evdev` isn't installed, or the `ydotool` daemon isn't running.
-- **Paste does nothing in a terminal** — some terminals expect a different paste shortcut than `Ctrl+Shift+V`.
+- **Paste does nothing in a terminal** — some terminals expect a different paste shortcut than `Ctrl+Shift+V`. Set it via **Settings → Paste shortcut** in the UI.
+- **Input capture broken on Wayland** — run `python3 -m diag` (or `textr-diag` after installing) for a report on session type, device readability, missing packages, and ydotool; add `--listen 5` to press keys and see the keycode → character mapping under your layout.
 - **Listener errors** — the daemon logs exceptions to the terminal and keeps running; if you see repeated `exception in key handler` tracebacks, check recently edited snippets for missing fields.
