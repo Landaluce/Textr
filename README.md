@@ -16,6 +16,7 @@ Text expansion for Linux (X11 and Wayland). Type a short trigger anywhere and Te
 - **Configurable date/time formats** — set the strftime patterns for `{date}`/`{time}` (and `:d`/`:time`/`:datetime`) in the profile settings, e.g. `%d/%m/%Y` for day-first dates
 - **Safe import** — importing a JSON file warns about triggers it will overwrite before applying
 - **Global hotkey** — `Ctrl+Shift+P` toggles pause/resume
+- **Manager shortcuts** — `Ctrl+N` adds a snippet; `F2`/`Enter` edits and `Del` deletes the selected snippet (Edit/Delete are scoped to the snippet list, so they never fire while typing in the search box)
 - **Crash resilience** — the keyboard listener survives internal errors and restarts automatically instead of silently dying
 
 ## Requirements

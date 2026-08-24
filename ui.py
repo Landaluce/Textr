@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect
 from PySide6.QtGui import (
-    QIcon, QAction, QPixmap, QPainter, QColor, QPalette, QPainterPath
+    QIcon, QAction, QPixmap, QPainter, QColor, QPalette, QPainterPath,
+    QShortcut, QKeySequence,
 )
 
 
@@ -421,15 +422,31 @@ class TexterUI(QMainWindow):
         # Add/Edit/Delete buttons
         btn_layout = QHBoxLayout()
         self.add_btn = QPushButton("Add")
+        self.add_btn.setToolTip("Add a snippet (Ctrl+N)")
         self.add_btn.clicked.connect(self.add_snippet)
         self.edit_btn = QPushButton("Edit")
+        self.edit_btn.setToolTip("Edit the selected snippet (F2 / Enter)")
         self.edit_btn.clicked.connect(self.edit_snippet)
         self.delete_btn = QPushButton("Delete")
+        self.delete_btn.setToolTip("Delete the selected snippet (Del)")
         self.delete_btn.clicked.connect(self.delete_snippet)
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.edit_btn)
         btn_layout.addWidget(self.delete_btn)
         left_layout.addLayout(btn_layout)
+
+        # Keyboard shortcuts. Add is window-wide; Edit/Delete are scoped to
+        # the tree so typing in the search box (or settings fields) never
+        # triggers them.
+        self.add_shortcut = QShortcut(QKeySequence("Ctrl+N"), self)
+        self.add_shortcut.activated.connect(self.add_snippet)
+        for seq in (QKeySequence("F2"), QKeySequence(Qt.Key_Return), QKeySequence(Qt.Key_Enter)):
+            shortcut = QShortcut(seq, self.snippet_list)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self.edit_snippet)
+        self.delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.snippet_list)
+        self.delete_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.delete_shortcut.activated.connect(self.delete_snippet)
 
         main_layout.addWidget(left_group, 1)
 
