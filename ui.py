@@ -189,9 +189,9 @@ class AddSnippetDialog(QDialog):
 
         # Languages
         self.languages_input = QTextEdit()
-        self.languages_input.setPlaceholderText('For template: JSON of languages\n{"python": "def f(): pass", "javascript": "function f() {}"}')
+        self.languages_input.setPlaceholderText('For template: JSON of programming languages\n{"python": "def f(): pass", "javascript": "function f() {}"}')
         self.languages_input.setFixedHeight(80)
-        layout.addRow("Languages (JSON):", self.languages_input)
+        layout.addRow("Programming languages (JSON):", self.languages_input)
 
         # Action
         self.action_input = QLineEdit()
@@ -246,7 +246,7 @@ class AddSnippetDialog(QDialog):
                 langs = json.loads(self.languages_input.toPlainText())
                 snippet["languages"] = langs
             except json.JSONDecodeError:
-                QMessageBox.critical(self, "Error", "Invalid JSON for languages")
+                QMessageBox.critical(self, "Error", "Invalid JSON for programming languages")
                 return None
         elif snippet_type == "command":
             snippet["action"] = self.action_input.text().strip()
@@ -430,7 +430,7 @@ class TexterUI(QMainWindow):
 
         # Language selector
         lang_layout = QHBoxLayout()
-        lang_layout.addWidget(QLabel("Current Language:"))
+        lang_layout.addWidget(QLabel("Programming language:"))
         self.language_combo = QComboBox()
         self.language_combo.addItems(["python", "javascript", "java", "c++", "go", "rust"])
         self.language_combo.setCurrentText(self.daemon.current_language if self.daemon else "python")
@@ -774,8 +774,8 @@ class TexterUI(QMainWindow):
         if self.daemon:
             # Persists to config.json so the language survives restarts.
             self.daemon.set_language(lang)
-            self.status_label.setText(f"Status: Language switched to {lang}")
-            print(f"UI: Language switched to {lang}")
+            self.status_label.setText(f"Status: Programming language switched to {lang}")
+            print(f"UI: Programming language switched to {lang}")
 
     def hide_window(self):
         self.hide()
