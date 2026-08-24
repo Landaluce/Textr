@@ -51,6 +51,7 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
 - **Per-snippet disable**: `AddSnippetDialog` has an Enabled checkbox (writes `"enabled": false` when unchecked); disabled snippets render dimmed (`DISABLED_COLOR`) in the tree and the preview notes the disabled state
 - **No status label**: the status bar was removed; the toggle button text + tray tooltip carry daemon/writing state, and transient feedback (saved/added/imported) goes to the terminal via `print` - keep print-based feedback when changing these flows
 - **Quit paths**: the window's X button (via `closeEvent`), the Quit button, and the tray Quit action all route through `quit_app()` (saves snippets, stops daemon, hides tray) - keep them unified when changing quit behavior
+- **Manager shortcuts**: `Ctrl+N` is a window-wide `QShortcut`; `F2`/`Enter` (edit) and `Del` (delete) use `Qt.WidgetWithChildrenShortcut` scoped to `snippet_list` so the search box never triggers them - keep this scoping when adding shortcuts
 
 ### Configuration Files
 - **config.json**: User settings (name, email, custom options) - loaded at startup, persisted on save

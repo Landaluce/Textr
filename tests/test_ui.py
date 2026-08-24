@@ -5,6 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox, QFileDialog
 
 from ui import AddSnippetDialog, TexterUI
@@ -359,6 +360,71 @@ class TestHighlightClipping:
         # view paints full-row below the delegate. (Property form with ':' so
         # comments mentioning it don't count.)
         assert dark_stylesheet.count("selection-background-color:") == 1
+
+
+def _activate(window):
+    """Make the window active so QShortcut events dispatch (offscreen)."""
+    window.show()
+    window.activateWindow()
+    QApplication.processEvents()
+
+
+class TestSnippetShortcuts:
+    def test_ctrl_n_opens_add(self, window, monkeypatch):
+        calls = []
+        monkeypatch.setattr(window, "add_snippet", lambda: calls.append("add"))
+        _activate(window)
+        QTest.keyClick(window, Qt.Key_N, Qt.ControlModifier)
+        assert calls == ["add"]
+
+    def test_f2_edits_selected(self, window, d, monkeypatch):
+        window.refresh_snippet_list()
+        item = find_snippet_item(window.snippet_list, "sig")
+        window.snippet_list.setCurrentItem(item)
+        window.snippet_list.setFocus()
+        calls = []
+        monkeypatch.setattr(window, "edit_snippet", lambda: calls.append("edit"))
+        _activate(window)
+        QTest.keyClick(window.snippet_list, Qt.Key_F2)
+        assert calls == ["edit"]
+
+    def test_enter_edits_selected(self, window, d, monkeypatch):
+        window.refresh_snippet_list()
+        item = find_snippet_item(window.snippet_list, "sig")
+        window.snippet_list.setCurrentItem(item)
+        window.snippet_list.setFocus()
+        calls = []
+        monkeypatch.setattr(window, "edit_snippet", lambda: calls.append("edit"))
+        _activate(window)
+        QTest.keyClick(window.snippet_list, Qt.Key_Return)
+        assert calls == ["edit"]
+
+    def test_delete_key_deletes_selected(self, window, d, monkeypatch):
+        window.refresh_snippet_list()
+        item = find_snippet_item(window.snippet_list, "sig")
+        window.snippet_list.setCurrentItem(item)
+        window.snippet_list.setFocus()
+        calls = []
+        monkeypatch.setattr(window, "delete_snippet", lambda: calls.append("delete"))
+        _activate(window)
+        QTest.keyClick(window.snippet_list, Qt.Key_Delete)
+        assert calls == ["delete"]
+
+    def test_delete_ignored_while_typing_in_search(self, window, monkeypatch):
+        calls = []
+        monkeypatch.setattr(window, "delete_snippet", lambda: calls.append("delete"))
+        _activate(window)
+        window.search_input.setFocus()
+        QTest.keyClick(window.search_input, Qt.Key_Delete)
+        assert calls == []
+
+    def test_delete_without_selection_does_nothing(self, window, d):
+        before = dict(d.snippets)
+        window.snippet_list.setCurrentItem(None)
+        window.snippet_list.setFocus()
+        _activate(window)
+        QTest.keyClick(window.snippet_list, Qt.Key_Delete)
+        assert d.snippets == before
 
 
 class TestQuitPaths:
