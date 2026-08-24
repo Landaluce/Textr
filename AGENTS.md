@@ -34,7 +34,8 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
 - **Snippet Types**: `variable` (static text), `template` (language-specific code), `command` (actions like toggle_pause)
 - **Input backends**: pynput (X11/XWayland) and `input_wayland.py` (evdev, native Wayland) both emit normalized `keys.Key` objects (`name`/`char`) consumed by the backend-agnostic `_handle_key`
 - **Keyboard layouts**: `input_wayland.py` maps evdev keycodes through `LAYOUTS` (`us`/`uk`/`de`/`fr`/`es`, each entry `(level1, level2, altgr)`); the active layout comes from `config["layout"]` and is selectable in the UI settings
-- **Prefix disambiguation**: when a trigger is the prefix of another (`:d` vs `:dt`), `_handle_key` defers expansion via `pending_trigger` until the next key disambiguates (longer trigger, boundary key/char fires the short one, or abort)
+- **Prefix disambiguation**: when a trigger is the prefix of another (`:d` vs `:dt`), `_handle_key` defers expansion via `pending_trigger` until the next key disambiguates (longer trigger, boundary key/char fires the short one, or abort); disabled snippets (`"enabled": false`) are excluded from matching AND deferral via `_enabled()`
+- **Date/time formats**: `get_context()` and the `:d`/`:time`/`:datetime` command expander honor `config["date_format"]` / `config["time_format"]` (strftime strings, defaults `%Y-%m-%d` / `%H:%M`)
 - **Snippet grouping/tags/usage**: snippets carry an optional `tags` list (legacy `category` is normalized into `tags` on load); the daemon records `usage`/`last_used` on every expansion (`_record_usage`) for the UI's recently/most-used sorting
 - **Data paths**: `_resolve_path()` prefers `$TEXTR_CONFIG_DIR`, then a legacy CWD file, then `$XDG_CONFIG_HOME/textr/`
 
@@ -44,8 +45,11 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
   - `TexterUI`: Main window with snippet management, category filtering, and configuration
   - `AddSnippetDialog`: Modal for creating/editing snippets
   - System tray integration for minimize/restore
-- **Settings UI**: Configure name, email, keyboard layout, paste shortcut, writing mode, debug verbosity
+- **Settings UI**: Configure name, email, keyboard layout, paste shortcut, date/time formats, writing mode, debug verbosity
 - **Trigger conflict warnings**: `TexterUI.trigger_conflicts()` flags duplicate triggers and prefix-deferral collisions when adding/editing snippets (`_confirm_trigger_conflicts` warns before saving)
+- **Import safety**: `import_json()` normalizes legacy list format to the dict format, warns (via a confirm dialog) about triggers it will overwrite, then imports
+- **Per-snippet disable**: `AddSnippetDialog` has an Enabled checkbox (writes `"enabled": false` when unchecked); disabled snippets render dimmed (`DISABLED_COLOR`) in the tree and the preview notes the disabled state
+- **Status label**: transient messages only ("Status: Ready", saved/added/switched); the toggle button text + tray tooltip carry daemon/writing state - do not write state back into the label
 - **Quit paths**: the window's X button (via `closeEvent`), the Quit button, and the tray Quit action all route through `quit_app()` (saves snippets, stops daemon, hides tray) - keep them unified when changing quit behavior
 
 ### Configuration Files

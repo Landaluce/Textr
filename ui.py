@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QTextEdit, QPushButton, QComboBox,
     QListWidget, QListWidgetItem, QDialog, QFormLayout,
     QMessageBox, QFileDialog, QGroupBox, QSystemTrayIcon, QMenu,
-    QTreeWidget, QTreeWidgetItem, QAbstractItemView,
+    QCheckBox, QTreeWidget, QTreeWidgetItem, QAbstractItemView,
     QStyledItemDelegate, QStyle, QStyleOptionViewItem
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect
@@ -198,6 +198,11 @@ class AddSnippetDialog(QDialog):
         self.action_input.setPlaceholderText("For command: set_language, toggle_pause, shutdown")
         layout.addRow("Action:", self.action_input)
 
+        # Enabled (default on; disabled snippets never expand)
+        self.enabled_check = QCheckBox("Enabled")
+        self.enabled_check.setChecked(self.snippet.get("enabled", True) if self.snippet else True)
+        layout.addRow(self.enabled_check)
+
         # Populate fields if editing
         if self.snippet:
             self.trigger_input.setText(self.snippet.get("trigger", ""))
@@ -238,6 +243,8 @@ class AddSnippetDialog(QDialog):
         snippet = {"trigger": trigger, "type": snippet_type, "category": category}
         if raw_tags:
             snippet["tags"] = raw_tags
+        if not self.enabled_check.isChecked():
+            snippet["enabled"] = False
 
         if snippet_type == "variable":
             snippet["value"] = self.value_input.toPlainText().strip()
@@ -294,10 +301,6 @@ class TexterUI(QMainWindow):
             self.toggle_writing_btn.setChecked(self.daemon.writing_mode)
             self.toggle_writing_btn.blockSignals(False)
             self._sync_toggle_text()
-            self.status_label.setText(
-                "Status: Daemon: " + ("enabled" if self.daemon.enabled else "paused") +
-                ", Human Typing: " + ("enabled" if self.daemon.writing_mode else "disabled")
-            )
 
     def quit_app(self):
         """Quit the entire application"""
@@ -324,6 +327,10 @@ class TexterUI(QMainWindow):
             self.daemon.config["layout"] = self.layout_combo.currentData()
             hotkey = self.paste_hotkey_edit.text().strip()
             self.daemon.config["paste_hotkey"] = hotkey or "ctrl+shift+v"
+            date_fmt = self.date_format_edit.text().strip()
+            self.daemon.config["date_format"] = date_fmt or "%Y-%m-%d"
+            time_fmt = self.time_format_edit.text().strip()
+            self.daemon.config["time_format"] = time_fmt or "%H:%M"
             self.daemon.save_config()
             self.status_label.setText("Status: Settings saved!")
 
@@ -467,17 +474,29 @@ class TexterUI(QMainWindow):
             if (self.daemon and hasattr(self.daemon, "config")) else "ctrl+shift+v"
         )
         self.paste_hotkey_edit.setPlaceholderText("ctrl+shift+v")
+        self.date_format_edit = QLineEdit(
+            self.daemon.config.get("date_format", "%Y-%m-%d")
+            if (self.daemon and hasattr(self.daemon, "config")) else "%Y-%m-%d"
+        )
+        self.date_format_edit.setPlaceholderText("%Y-%m-%d (strftime)")
+        self.time_format_edit = QLineEdit(
+            self.daemon.config.get("time_format", "%H:%M")
+            if (self.daemon and hasattr(self.daemon, "config")) else "%H:%M"
+        )
+        self.time_format_edit.setPlaceholderText("%H:%M (strftime)")
         self.save_settings_btn = QPushButton("Save Settings")
         self.save_settings_btn.clicked.connect(self.save_user_config)
         settings_layout.addRow("Name:", self.name_edit)
         settings_layout.addRow("Email:", self.email_edit)
         settings_layout.addRow("Keyboard layout:", self.layout_combo)
         settings_layout.addRow("Paste shortcut:", self.paste_hotkey_edit)
+        settings_layout.addRow("Date format:", self.date_format_edit)
+        settings_layout.addRow("Time format:", self.time_format_edit)
         settings_layout.addRow(self.save_settings_btn)
         right_layout.addWidget(settings_group)
 
-        # Status
-        self.status_label = QLabel("Status: Ready, Daemon: enabled, Human Typing: disabled")
+        # Status (transient messages only; the toggle buttons carry the state)
+        self.status_label = QLabel("Status: Ready")
         right_layout.addWidget(self.status_label)
 
         # Buttons
@@ -731,14 +750,19 @@ class TexterUI(QMainWindow):
         "template": "#89b4fa",  # blue
         "variable": "#a6e3a1",  # green
     }
+    DISABLED_COLOR = "#6c7086"  # muted Catppuccin overlay for disabled snippets
 
     def _add_snippet_item(self, parent, trigger, snippet):
         item = QTreeWidgetItem(parent, [trigger])
         item.setData(0, Qt.UserRole, trigger)
         snippet_type = snippet.get("type", "variable")
         category = snippet.get("category", "uncategorized")
-        item.setForeground(0, QColor(self.TYPE_COLORS.get(snippet_type, "#cdd6f4")))
-        item.setToolTip(0, f"{snippet_type.capitalize()} | Category: {category}")
+        enabled = snippet.get("enabled", True)
+        item.setForeground(
+            0, QColor(self.DISABLED_COLOR if not enabled else self.TYPE_COLORS.get(snippet_type, "#cdd6f4"))
+        )
+        state = " | DISABLED" if not enabled else ""
+        item.setToolTip(0, f"{snippet_type.capitalize()} | Category: {category}{state}")
         return item
 
     def on_category_changed(self, category):
@@ -769,11 +793,12 @@ class TexterUI(QMainWindow):
         tags = snippet.get("tags") or []
         used = int(snippet.get("usage", 0))
         last_used = snippet.get("last_used", "never")
+        disabled_note = "\n\n*** DISABLED - this snippet will not expand ***" if not snippet.get("enabled", True) else ""
 
         self.preview_text.setText(
             f"Category: {snippet_category}\nTags: {', '.join(tags) if tags else 'none'}\n"
             f"Type: {snippet_type}\nTrigger: {trigger}\n"
-            f"Used: {used} times (last: {last_used})\n\nExpands to:\n{preview}"
+            f"Used: {used} times (last: {last_used})\n\nExpands to:\n{preview}{disabled_note}"
         )
 
     def on_language_changed(self, lang):
@@ -919,12 +944,6 @@ class TexterUI(QMainWindow):
 
         self.tray_icon.setIcon(create_status_icon("green" if enabled else "red"))
         self.tray_icon.setToolTip(f"Texter - {status.capitalize()}")
-
-        writing = self.daemon.writing_mode if self.daemon else False
-        self.status_label.setText(
-            f"Status: Daemon: {status}, Human Typing: "
-            f"{'enabled' if writing else 'disabled'}"
-        )
         print(f"UI: Daemon {status}")
 
     def toggle_pause(self):
@@ -949,10 +968,6 @@ class TexterUI(QMainWindow):
         self.toggle_writing_btn.setChecked(checked)
         self.toggle_writing_btn.blockSignals(False)
         self._sync_toggle_text()
-        self.status_label.setText(
-            f"Status: Daemon: {'enabled' if self.daemon.enabled else 'paused'}, "
-            f"Human Typing: {'enabled' if checked else 'disabled'}"
-        )
         print(f"UI: Human typing {'enabled' if checked else 'disabled'}")
 
     def quit_button(self):
@@ -966,16 +981,48 @@ class TexterUI(QMainWindow):
 
     def import_json(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Import Snippets", "", "JSON Files (*.json)")
-        if file_path:
-            try:
-                with open(file_path, "r") as f:
-                    snippets = json.load(f)
-                if self.daemon:
-                    self.daemon.import_snippets(snippets)
-                    self.refresh_snippet_list()
-                    self.status_label.setText(f"Status: Imported snippets from {file_path}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to import: {e}")
+        if not file_path:
+            return
+        try:
+            with open(file_path, "r") as f:
+                raw = json.load(f)
+            # Accept both the dict format ({trigger: snippet}) and the legacy
+            # list format ([{"trigger": ..., ...}]); normalize to a dict.
+            if isinstance(raw, list):
+                snippets = {
+                    item.get("trigger", ""): {k: v for k, v in item.items() if k != "trigger"}
+                    for item in raw if isinstance(item, dict) and item.get("trigger")
+                }
+            elif isinstance(raw, dict):
+                snippets = raw
+            else:
+                raise ValueError("file is neither a snippet dict nor a list")
+
+            if not snippets:
+                QMessageBox.information(self, "Import", "No snippets found in the file.")
+                return
+
+            if self.daemon:
+                overwritten = sorted(set(self.daemon.snippets) & set(snippets))
+                if overwritten:
+                    preview = ", ".join(repr(t) for t in overwritten[:15])
+                    if len(overwritten) > 15:
+                        preview += f", ... ({len(overwritten)} total)"
+                    reply = QMessageBox.question(
+                        self, "Import conflict",
+                        f"Import will overwrite {len(overwritten)} existing snippet(s):\n\n"
+                        f"{preview}\n\nContinue?",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+                    )
+                    if reply != QMessageBox.Yes:
+                        return
+                self.daemon.import_snippets(snippets)
+                self.refresh_snippet_list()
+                self.status_label.setText(
+                    f"Status: Imported {len(snippets)} snippets (saved)"
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to import: {e}")
 
     def export_json(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Export Snippets", "", "JSON Files (*.json)")
