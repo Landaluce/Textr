@@ -318,16 +318,27 @@ class TexterUI(QMainWindow):
         self.group_combo.addItem("By type", "type")
         self.group_combo.addItem("By tag", "tag")
         self.group_combo.setCurrentIndex(1)  # category groups by default
-        self.group_combo.currentIndexChanged.connect(self.refresh_snippet_list)
+        self.group_combo.currentIndexChanged.connect(self._on_group_mode_changed)
         view_layout.addWidget(self.group_combo)
-        view_layout.addWidget(QLabel("Sort:"))
+        view_layout.addWidget(QLabel("Then by:"))
+        self.subgroup_combo = QComboBox()
+        self.subgroup_combo.addItem("None", "none")
+        self.subgroup_combo.addItem("Category", "category")
+        self.subgroup_combo.addItem("Type", "type")
+        self.subgroup_combo.addItem("Tag", "tag")
+        self.subgroup_combo.currentIndexChanged.connect(self.refresh_snippet_list)
+        view_layout.addWidget(self.subgroup_combo)
+        left_layout.addLayout(view_layout)
+
+        sort_layout = QHBoxLayout()
+        sort_layout.addWidget(QLabel("Sort:"))
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("Name", "name")
         self.sort_combo.addItem("Recently used", "recent")
         self.sort_combo.addItem("Most used", "used")
         self.sort_combo.currentIndexChanged.connect(self.refresh_snippet_list)
-        view_layout.addWidget(self.sort_combo)
-        left_layout.addLayout(view_layout)
+        sort_layout.addWidget(self.sort_combo)
+        left_layout.addLayout(sort_layout)
 
         # Snippet tree (groupable list); font comes from the QSS stylesheet.
         self.snippet_list = SnippetTreeWidget()
@@ -513,6 +524,7 @@ class TexterUI(QMainWindow):
         self._sort_items(items)
 
         group_mode = self.group_combo.currentData()
+        sub_mode = self.subgroup_combo.currentData()
         if group_mode == "none":
             for trigger, snippet in items:
                 self._add_snippet_item(self.snippet_list, trigger, snippet)
@@ -520,7 +532,7 @@ class TexterUI(QMainWindow):
             # Build groups first (sorted for stable display), then snippets.
             groups = {}
             for trigger, snippet in items:
-                for path in self._group_paths(snippet, group_mode):
+                for path in self._group_paths(snippet, group_mode, sub_mode):
                     groups.setdefault(tuple(path), []).append((trigger, snippet))
             for path in sorted(groups, key=lambda p: tuple(part.lower() for part in p)):
                 parent = self.snippet_list
@@ -574,8 +586,25 @@ class TexterUI(QMainWindow):
         category = snippet.get("category", "")
         return [category] if category and category != "uncategorized" else []
 
-    def _group_paths(self, snippet, group_mode):
-        """Group paths (each a list of parts) under which a snippet appears."""
+    def _group_paths(self, snippet, group_mode, sub_mode="none"):
+        """Group paths (each a list of parts) under which a snippet appears.
+
+        ``sub_mode`` adds a second level ("then by") inside each primary group.
+        """
+        primary = self._primary_paths(snippet, group_mode)
+        if sub_mode == "none":
+            return primary
+        subs = self._sub_paths(snippet, sub_mode)
+        paths = []
+        for path in primary:
+            for sub in subs:
+                if path[-len(sub):] == sub:
+                    paths.append(path)  # redundant (e.g. category then category)
+                else:
+                    paths.append(path + sub)
+        return paths
+
+    def _primary_paths(self, snippet, group_mode):
         if group_mode == "type":
             return [[snippet.get("type", "variable")]]
         if group_mode == "tag":
@@ -584,6 +613,21 @@ class TexterUI(QMainWindow):
         # category: '/' separates nested folder levels
         category = snippet.get("category", "uncategorized") or "uncategorized"
         return [category.split("/")]
+
+    def _sub_paths(self, snippet, sub_mode):
+        """Secondary ("then by") group parts for a snippet."""
+        if sub_mode == "type":
+            return [[snippet.get("type", "variable")]]
+        if sub_mode == "tag":
+            tags = list(dict.fromkeys(self._snippet_tags(snippet)))
+            return [[t] for t in tags] if tags else [["uncategorized"]]
+        category = snippet.get("category", "uncategorized") or "uncategorized"
+        return [category.split("/")]
+
+    def _on_group_mode_changed(self):
+        """The 'then by' selector only applies when a primary group is set."""
+        self.subgroup_combo.setEnabled(self.group_combo.currentData() != "none")
+        self.refresh_snippet_list()
 
     def _ensure_group(self, parent, name):
         """Find or create a (non-selectable) group node named `name`.

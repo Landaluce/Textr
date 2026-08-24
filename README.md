@@ -9,7 +9,7 @@ Text expansion for Linux (X11 and Wayland). Type a short trigger anywhere and Te
 - **Two insertion modes** — fast clipboard paste (default) or human-like typing ("Human Typing")
 - **Word-boundary matching** — triggers only fire after whitespace/punctuation, never mid-word
 - **Prefix disambiguation** — when one trigger is the prefix of another (`:d` vs `:dt`), expansion waits until the next key reveals which one you meant; the longer trigger wins
-- **Grouped snippet manager** — group snippets by category (with `python/web`-style nested folders), by type, or by tag; search filters as you type; sort by name, recently used, or most used
+- **Grouped snippet manager** — group snippets by category (with `python/web`-style nested folders), by type, or by tag; optionally add a second "then by" level inside each group (e.g. category → type); search filters as you type; sort by name, recently used, or most used
 - **Tags & usage tracking** — snippets carry multiple comma-separated tags, and the daemon records how often and when each snippet expands
 - **Template variables** — `{name}`, `{email}`, `{date}`, `{time}`, `{iso}`, `{week}`, `{clipboard}`, plus `{cursor}` to leave the caret mid-expansion
 - **Global hotkey** — `Ctrl+Shift+P` toggles pause/resume

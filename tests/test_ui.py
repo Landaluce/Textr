@@ -130,6 +130,60 @@ class TestSnippetGrouping:
         assert collect_triggers(window.snippet_list).count("multi") == 2
 
 
+class TestSubGrouping:
+    def test_default_is_no_subgroup(self, window):
+        assert window.subgroup_combo.currentData() == "none"
+        # snippets are direct children of the category group (single level)
+        group = window.snippet_list.topLevelItem(0)
+        assert group.data(0, Qt.UserRole + 1) == "test"
+        assert group.child(0).data(0, Qt.UserRole) == ":d"
+
+    def test_category_then_type(self, window, d):
+        d.add_or_update_snippet("ff", {"type": "variable", "value": "v", "category": "other"})
+        window.refresh_snippet_list()
+        window.subgroup_combo.setCurrentIndex(window.subgroup_combo.findData("type"))
+
+        assert top_level_groups(window.snippet_list) == ["other", "test"]
+        # degenerate sub-groups still render (one child)
+        other = window.snippet_list.topLevelItem(0)
+        assert other.child(0).data(0, Qt.UserRole + 1) == "variable"
+        assert other.child(0).child(0).data(0, Qt.UserRole) == "ff"
+        # test category splits into command / template / variable
+        test = window.snippet_list.topLevelItem(1)
+        assert [test.child(i).data(0, Qt.UserRole + 1) for i in range(test.childCount())] == [
+            "command", "template", "variable",
+        ]
+
+    def test_type_then_category(self, window):
+        window.group_combo.setCurrentIndex(window.group_combo.findData("type"))
+        window.subgroup_combo.setCurrentIndex(window.subgroup_combo.findData("category"))
+
+        assert top_level_groups(window.snippet_list) == ["command", "template", "variable"]
+        cmd = window.snippet_list.topLevelItem(0)
+        assert cmd.child(0).data(0, Qt.UserRole + 1) == "test"
+        assert cmd.child(0).child(0).data(0, Qt.UserRole) == ":d"
+
+    def test_tag_then_type_duplicates_across_tags(self, window, d):
+        d.add_or_update_snippet("multi", {"type": "variable", "value": "v", "tags": ["a", "b"]})
+        window.refresh_snippet_list()
+        window.group_combo.setCurrentIndex(window.group_combo.findData("tag"))
+        window.subgroup_combo.setCurrentIndex(window.subgroup_combo.findData("type"))
+
+        assert collect_triggers(window.snippet_list).count("multi") == 2
+
+    def test_same_primary_and_subgroup_does_not_duplicate(self, window):
+        window.subgroup_combo.setCurrentIndex(window.subgroup_combo.findData("category"))
+        group = window.snippet_list.topLevelItem(0)
+        assert group.data(0, Qt.UserRole + 1) == "test"
+        assert group.child(0).data(0, Qt.UserRole) == ":d"
+
+    def test_flat_mode_ignores_subgroup(self, window):
+        window.group_combo.setCurrentIndex(window.group_combo.findData("none"))
+        window.subgroup_combo.setCurrentIndex(window.subgroup_combo.findData("type"))
+        assert top_level_groups(window.snippet_list) == []
+        assert sorted(collect_triggers(window.snippet_list)) == [":d", "longtrig", "sig"]
+
+
 class TestSearchAndSort:
     def test_search_filters_by_trigger(self, window):
         window.search_input.setText("sig")
