@@ -32,8 +32,9 @@ except ImportError:  # pragma: no cover - exercised on non-Linux / bare installs
 
 from keys import Key
 
-# Sentinel returned by WaylandKeyHandler for the Ctrl+Shift+P pause hotkey.
-PAUSE_HOTKEY = "PAUSE_HOTKEY"
+# Sentinels returned by WaylandKeyHandler for global hotkeys.
+PAUSE_HOTKEY = "PAUSE_HOTKEY"  # Ctrl+Shift+P toggles pause/resume
+SHOW_HOTKEY = "SHOW_HOTKEY"  # Ctrl+Shift+Space summons the manager window
 
 # Linux input event keycodes (see <linux/input-event-codes.h>).
 KEY_ESC = 1
@@ -250,9 +251,11 @@ class WaylandKeyHandler:
             self.altgr = True
             return None
 
-        # Ctrl+Shift+P toggles pause/resume.
+        # Global hotkeys (checked before the generic Ctrl/Alt suppression below).
         if code == KEY_P and self.ctrl and self.shift:
             return PAUSE_HOTKEY
+        if code == KEY_SPACE and self.ctrl and self.shift:
+            return SHOW_HOTKEY
 
         # With Ctrl or left-Alt held the key is a shortcut (Ctrl+C, Alt+Tab...),
         # not text - suppress it so it never pollutes the trigger buffer.
@@ -291,9 +294,10 @@ def _is_keyboard_device(name, caps):
 class WaylandInputListener:
     """Captures global keyboard input from all evdev keyboard devices."""
 
-    def __init__(self, on_key=None, on_hotkey=None, layout="us"):
+    def __init__(self, on_key=None, on_hotkey=None, on_show_hotkey=None, layout="us"):
         self.on_key = on_key
         self.on_hotkey = on_hotkey
+        self.on_show_hotkey = on_show_hotkey
         self.layout = layout
         self.handler = WaylandKeyHandler(layout=layout)
         self._threads = []
@@ -365,6 +369,10 @@ class WaylandInputListener:
                 if result == PAUSE_HOTKEY:
                     if self.on_hotkey:
                         self.on_hotkey()
+                    continue
+                if result == SHOW_HOTKEY:
+                    if self.on_show_hotkey:
+                        self.on_show_hotkey()
                     continue
                 # Serialize dispatch: multiple devices could fire concurrently.
                 with self._dispatch_lock:

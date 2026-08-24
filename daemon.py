@@ -818,6 +818,12 @@ class Daemon:
         self.enabled = not self.enabled
         print("Global hotkey triggered: Texter enabled =", self.enabled)
 
+    def show_window_via_hotkey(self):
+        """Global Ctrl+Shift+Space: bring the manager window to the front."""
+        print("Global hotkey triggered: showing manager window")
+        if hasattr(self, "ui") and self.ui:
+            self.ui.daemon_command.emit("ui")
+
     def _start_wayland_input(self):
         """Start evdev input capture on Wayland. Returns True on success."""
         try:
@@ -828,6 +834,7 @@ class Daemon:
         self.wayland_input = WaylandInputListener(
             on_key=self.on_press,
             on_hotkey=self.toggle_pause_via_hotkey,
+            on_show_hotkey=self.show_window_via_hotkey,
             layout=self.config.get("layout", "us"),
         )
         return self.wayland_input.start()
@@ -852,11 +859,13 @@ class Daemon:
         # Register global hotkey listener
         try:
             self.hotkey_listener = keyboard.GlobalHotKeys({
-                '<ctrl>+<shift>+p': self.toggle_pause_via_hotkey
+                '<ctrl>+<shift>+p': self.toggle_pause_via_hotkey,
+                '<ctrl>+<shift>+<space>': self.show_window_via_hotkey,
             })
             self.hotkey_listener.daemon = True
             self.hotkey_listener.start()
-            print("Global hotkey registered: Ctrl+Shift+P to toggle pause/resume")
+            print("Global hotkeys registered: Ctrl+Shift+P to toggle pause/resume, "
+                  "Ctrl+Shift+Space to show the manager")
         except Exception as e:
             print("Failed to register global hotkeys listener:", e)
 
