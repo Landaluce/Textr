@@ -62,7 +62,7 @@ This starts both the UI window and the background daemon. Close or hide the wind
 | Type | Behavior |
 | ------ | ---------- |
 | `variable` | Expands to static text, e.g. trigger `sig` → your signature |
-| `template` | Expands to language-specific code chosen by the current language selector |
+| `template` | Expands to language-specific code chosen by the Programming language selector |
 | `command` | Performs an action (no text inserted), e.g. `:pause` toggles pause/resume |
 
 Snippet JSON structure:
