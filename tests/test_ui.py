@@ -370,6 +370,11 @@ def _activate(window):
 
 
 class TestSnippetShortcuts:
+    def test_shortcuts_shown_in_button_labels(self, window):
+        assert window.add_btn.text() == "Add (Ctrl+N)"
+        assert window.edit_btn.text() == "Edit (F2)"
+        assert window.delete_btn.text() == "Delete (Del)"
+
     def test_ctrl_n_opens_add(self, window, monkeypatch):
         calls = []
         monkeypatch.setattr(window, "add_snippet", lambda: calls.append("add"))
