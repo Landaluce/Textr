@@ -62,10 +62,9 @@ dark_stylesheet = """
         background-color: #a6e3a1;
         color: #11111b;
     }
-    QTreeWidget::item {
-        padding: 6px;
-        border-bottom: 1px solid #313244;
-    }
+    /* No padding/border here: they would make the selection rectangle spill
+       out of the item's own row into the rows above/below (and the group
+       header to its left). Keep the highlight exactly on the clicked row. */
     QTreeWidget::item:selected {
         background-color: #b4befe;
         color: #11111b;
