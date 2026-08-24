@@ -15,8 +15,6 @@ Text expansion for Linux (X11 and Wayland). Type a short trigger anywhere and Te
 - **Per-snippet enable/disable** — turn a snippet off (edit → uncheck **Enabled**) without deleting it; disabled snippets are dimmed in the tree and never expand
 - **Configurable date/time formats** — set the strftime patterns for `{date}`/`{time}` (and `:d`/`:time`/`:datetime`) in the profile settings, e.g. `%d/%m/%Y` for day-first dates
 - **Safe import** — importing a JSON file warns about triggers it will overwrite before applying
-- **Global hotkey** — `Ctrl+Shift+P` toggles pause/resume
-- **Manager shortcuts** — `Ctrl+N` adds a snippet; `F2`/`Enter` edits and `Del` deletes the selected snippet (Edit/Delete are scoped to the snippet list, so they never fire while typing in the search box)
 - **Crash resilience** — the keyboard listener survives internal errors and restarts automatically instead of silently dying
 
 ## Requirements
@@ -60,6 +58,18 @@ bash run.sh                      # or: python3 main.py, from the source tree
 ```
 
 This starts both the UI window and the background daemon. Close or hide the window; triggers keep working while it is hidden.
+
+### Keyboard shortcuts
+
+| Shortcut | Where | Action |
+| -------- | ----- | ------ |
+| `Ctrl+Shift+P` | anywhere (global) | Toggle the daemon pause/resume |
+| `Ctrl+N` | manager window | Add a snippet |
+| `F2` / `Enter` | manager window | Edit the selected snippet |
+| `Del` | manager window | Delete the selected snippet |
+| `Ctrl+Shift+V` | expansion (paste mode) | Insert the expansion text (configurable via **Settings → Paste shortcut**) |
+
+Edit/Delete only fire when the snippet list has focus, so they never trigger while you're typing in the search box. The paste shortcut is a combo Textr *sends* to paste — it does not work in Human Typing mode (typed char-by-char) or on Wayland (typed via ydotool).
 
 ### Snippet types
 
