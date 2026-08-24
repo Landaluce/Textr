@@ -9,6 +9,8 @@ Text expansion for Linux (X11 and Wayland). Type a short trigger anywhere and Te
 - **Two insertion modes** — fast clipboard paste (default) or human-like typing ("Human Typing")
 - **Word-boundary matching** — triggers only fire after whitespace/punctuation, never mid-word
 - **Prefix disambiguation** — when one trigger is the prefix of another (`:d` vs `:dt`), expansion waits until the next key reveals which one you meant; the longer trigger wins
+- **Grouped snippet manager** — group snippets by category (with `python/web`-style nested folders), by type, or by tag; search filters as you type; sort by name, recently used, or most used
+- **Tags & usage tracking** — snippets carry multiple comma-separated tags, and the daemon records how often and when each snippet expands
 - **Template variables** — `{name}`, `{email}`, `{date}`, `{time}`, `{iso}`, `{week}`, `{clipboard}`, plus `{cursor}` to leave the caret mid-expansion
 - **Global hotkey** — `Ctrl+Shift+P` toggles pause/resume
 - **Crash resilience** — the keyboard listener survives internal errors and restarts automatically instead of silently dying
@@ -70,9 +72,12 @@ Snippet JSON structure:
   "trigger": "sig",
   "type": "variable",
   "category": "personal",
+  "tags": ["personal", "work"],
   "value": "Best, {name} ({email})"
 }
 ```
+
+`tags` is optional (a snippet can appear under several groups); snippets loaded from older files without `tags` default to their `category`. The daemon also records `usage` (count) and `last_used` (ISO timestamp) on every expansion for the recently/most-used sorting.
 
 Templates use `{"python": "...", "javascript": "..."}` under `"languages"` and support the same `{variable}` substitution.
 

@@ -104,6 +104,14 @@ class Daemon:
                     loaded = json.load(f)
 
                 with self.snippets_lock:
+                    for trigger, snippet in loaded.items():
+                        if isinstance(snippet, dict) and "tags" not in snippet:
+                            # Legacy snippets only had a category; treat it as
+                            # their primary tag so tag-grouping still works.
+                            category = snippet.get("category", "")
+                            snippet["tags"] = (
+                                [category] if category and category != "uncategorized" else []
+                            )
                     self.snippets.update(loaded)
                 print(f"Loaded {len(loaded)} snippets from {self.snippets_file}")
             except Exception as e:
@@ -624,6 +632,14 @@ class Daemon:
                     return True
         return False
 
+    def _record_usage(self, trigger):
+        """Count an expansion so the UI can sort by recent/most used."""
+        with self.snippets_lock:
+            snippet = self.snippets.get(trigger)
+            if isinstance(snippet, dict):
+                snippet["usage"] = int(snippet.get("usage", 0)) + 1
+                snippet["last_used"] = datetime.now().isoformat(timespec="seconds")
+
     def _expand(self, trigger):
         """Resolve and expand `trigger` if it yields text; buffer is cleared."""
         with self.snippets_lock:
@@ -637,6 +653,7 @@ class Daemon:
         if item.get("type") == "command":
             expansion = self.is_valid_trigger(trigger)
             if expansion is not None:
+                self._record_usage(trigger)
                 self.replace(trigger, expansion)
             return True
 
@@ -647,6 +664,7 @@ class Daemon:
 
         expansion = self.is_valid_trigger(trigger)
         if expansion is not None:
+            self._record_usage(trigger)
             self.replace(trigger, expansion)
         return True
 

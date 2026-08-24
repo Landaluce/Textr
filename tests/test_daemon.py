@@ -362,6 +362,57 @@ class TestLayoutConfig:
         assert captured["layout"] == "fr"
 
 
+class TestUsageTracking:
+    def test_expansion_records_usage_and_last_used(self, d):
+        type_string(d, " sig")
+        assert d.snippets["sig"]["usage"] == 1
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$", d.snippets["sig"]["last_used"])
+
+        type_string(d, " sig")
+        assert d.snippets["sig"]["usage"] == 2
+
+    def test_usage_persisted_on_save(self, d):
+        type_string(d, " sig")
+        d.save_snippets()
+        with open(d.snippets_file) as f:
+            saved = json.load(f)
+        assert saved["sig"]["usage"] == 1
+
+    def test_paused_expansion_does_not_record_usage(self, d):
+        d.enabled = False
+        type_string(d, " sig")
+        assert d.snippets["sig"].get("usage", 0) == 0
+
+
+class TestTags:
+    def test_legacy_category_becomes_tag_on_load(self, tmp_path, monkeypatch):
+        import daemon as daemon_mod
+        from conftest import FakeClipboard, FakeController
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("TEXTR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(daemon_mod.keyboard, "Controller", FakeController)
+        monkeypatch.setattr(daemon_mod, "pyperclip", FakeClipboard())
+        monkeypatch.setattr(daemon_mod.time, "sleep", lambda seconds: None)
+        (tmp_path / "snippets.json").write_text(json.dumps({
+            "a": {"type": "variable", "value": "1", "category": "python"},
+            "b": {"type": "variable", "value": "2", "category": "uncategorized"},
+            "c": {"type": "variable", "value": "3", "tags": ["web"]},
+        }))
+
+        daemon = daemon_mod.Daemon(snippets_file="snippets.json")
+        assert daemon.snippets["a"]["tags"] == ["python"]
+        assert daemon.snippets["b"]["tags"] == []
+        assert daemon.snippets["c"]["tags"] == ["web"]  # explicit tags untouched
+
+    def test_tags_persisted_on_save(self, d):
+        d.add_or_update_snippet("tg", {"type": "variable", "value": "v", "tags": ["x", "y"]})
+        d.save_snippets()
+        with open(d.snippets_file) as f:
+            saved = json.load(f)
+        assert saved["tg"]["tags"] == ["x", "y"]
+
+
 class TestContextVars:
     def test_iso_renders_as_iso8601(self, d):
         rendered = d.render_template("{iso}")
