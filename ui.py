@@ -6,7 +6,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QTextEdit, QPushButton, QComboBox,
     QListWidget, QListWidgetItem, QDialog, QFormLayout,
-    QMessageBox, QFileDialog, QGroupBox, QSystemTrayIcon, QMenu
+    QMessageBox, QFileDialog, QGroupBox, QSystemTrayIcon, QMenu,
+    QTreeWidget, QTreeWidgetItem, QAbstractItemView
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QIcon, QAction, QPixmap, QPainter, QColor
@@ -22,6 +23,49 @@ def create_status_icon(color_name):
     painter.drawEllipse(2, 2, 12, 12)
     painter.end()
     return QIcon(pixmap)
+
+
+class SnippetTreeWidget(QTreeWidget):
+    """Snippet tree; dropping a snippet onto a category group moves it there."""
+
+    def dropEvent(self, event):
+        window = self.window()
+        grouping = getattr(window, "group_combo", None)
+        if grouping is None or grouping.currentData() != "category":
+            event.ignore()
+            return
+        target = self.itemAt(event.position().toPoint())
+        dragged = self.currentItem()
+        if (
+            target is None or dragged is None
+            or target.data(0, Qt.UserRole) is not None  # not a group node
+            or dragged.data(0, Qt.UserRole) is None     # dragged a group, not a snippet
+        ):
+            event.ignore()
+            return
+        group_path = self._group_path(target)
+        daemon = getattr(window, "daemon", None)
+        trigger = dragged.data(0, Qt.UserRole)
+        if group_path and daemon:
+            snippet = daemon.snippets.get(trigger)
+            if isinstance(snippet, dict):
+                snippet["category"] = "/".join(group_path)
+                daemon.save_snippets()
+                window.refresh_snippet_list()
+                event.accept()
+                return
+        event.ignore()
+
+    def _group_path(self, item):
+        parts = []
+        node = item
+        while node is not None:
+            name = node.data(0, Qt.UserRole + 1)
+            if name is None:
+                break
+            parts.append(name)
+            node = node.parent()
+        return list(reversed(parts))
 
 
 class AddSnippetDialog(QDialog):
@@ -47,6 +91,11 @@ class AddSnippetDialog(QDialog):
         self.category_input.setEditable(True)  # Allow new categories
         self.category_input.addItems(["uncategorized"] + self.categories)
         layout.addRow("Category:", self.category_input)
+
+        # Tags (multiple, comma-separated)
+        self.tags_input = QLineEdit()
+        self.tags_input.setPlaceholderText("Comma-separated, e.g. python, web")
+        layout.addRow("Tags:", self.tags_input)
 
         # Type
         self.type_combo = QComboBox()
@@ -75,6 +124,7 @@ class AddSnippetDialog(QDialog):
         if self.snippet:
             self.trigger_input.setText(self.snippet.get("trigger", ""))
             self.category_input.setCurrentText(self.snippet.get("category", "uncategorized"))
+            self.tags_input.setText(", ".join(self.snippet.get("tags") or []))
             self.type_combo.setCurrentText(self.snippet.get("type", "variable"))
             self.on_type_changed(self.snippet.get("type", "variable"))
 
@@ -105,8 +155,11 @@ class AddSnippetDialog(QDialog):
         trigger = self.trigger_input.text().strip()
         snippet_type = self.type_combo.currentText()
         category = self.category_input.currentText().strip() or "uncategorized"
+        raw_tags = [t.strip() for t in self.tags_input.text().split(",") if t.strip()]
 
         snippet = {"trigger": trigger, "type": snippet_type, "category": category}
+        if raw_tags:
+            snippet["tags"] = raw_tags
 
         if snippet_type == "variable":
             snippet["value"] = self.value_input.toPlainText().strip()
@@ -232,12 +285,36 @@ class TexterUI(QMainWindow):
         cat_layout.addWidget(self.category_combo)
         left_layout.addLayout(cat_layout)
 
-        # Snippet list
-        self.snippet_list = QListWidget()
-        self.snippet_list.setFont(QFont("Arial", 16))  # family, size
+        # Search box
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search triggers or expansion text...")
+        self.search_input.textChanged.connect(self.refresh_snippet_list)
+        left_layout.addWidget(self.search_input)
 
-        self.snippet_list.setSortingEnabled(False)  # We'll handle sorting manually
-        from PySide6.QtWidgets import QAbstractItemView
+        # Grouping and sort controls
+        view_layout = QHBoxLayout()
+        view_layout.addWidget(QLabel("Group:"))
+        self.group_combo = QComboBox()
+        self.group_combo.addItem("None", "none")
+        self.group_combo.addItem("By category", "category")
+        self.group_combo.addItem("By type", "type")
+        self.group_combo.addItem("By tag", "tag")
+        self.group_combo.setCurrentIndex(1)  # category groups by default
+        self.group_combo.currentIndexChanged.connect(self.refresh_snippet_list)
+        view_layout.addWidget(self.group_combo)
+        view_layout.addWidget(QLabel("Sort:"))
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem("Name", "name")
+        self.sort_combo.addItem("Recently used", "recent")
+        self.sort_combo.addItem("Most used", "used")
+        self.sort_combo.currentIndexChanged.connect(self.refresh_snippet_list)
+        view_layout.addWidget(self.sort_combo)
+        left_layout.addLayout(view_layout)
+
+        # Snippet tree (groupable list)
+        self.snippet_list = SnippetTreeWidget()
+        self.snippet_list.setFont(QFont("Arial", 14))
+        self.snippet_list.setHeaderHidden(True)
         self.snippet_list.setDragDropMode(QAbstractItemView.InternalMove)
         self.snippet_list.itemSelectionChanged.connect(self.on_selection_changed)
         left_layout.addWidget(self.snippet_list)
@@ -385,7 +462,6 @@ class TexterUI(QMainWindow):
         return ""
 
     def refresh_snippet_list(self):
-        self.snippet_list.setSortingEnabled(False)
         self.snippet_list.clear()
 
         if not self.daemon:
@@ -403,31 +479,118 @@ class TexterUI(QMainWindow):
         selected_category = self.category_combo.currentText()
         snippets = self.daemon.get_snippets_by_category(selected_category)
 
-        type_order = {"command": 0, "template": 1, "variable": 2}
-        sorted_items = sorted(
-            snippets.items(),
-            key=lambda kv: (
-                type_order.get(kv[1].get("type", "variable"), 99),
-                kv[0].lower()
+        query = self.search_input.text().strip().lower()
+        items = [
+            (trigger, snippet)
+            for trigger, snippet in snippets.items()
+            if self._matches_search(trigger, snippet, query)
+        ]
+        self._sort_items(items)
+
+        group_mode = self.group_combo.currentData()
+        if group_mode == "none":
+            for trigger, snippet in items:
+                self._add_snippet_item(self.snippet_list, trigger, snippet)
+        else:
+            # Build groups first (sorted for stable display), then snippets.
+            groups = {}
+            for trigger, snippet in items:
+                for path in self._group_paths(snippet, group_mode):
+                    groups.setdefault(tuple(path), []).append((trigger, snippet))
+            for path in sorted(groups, key=lambda p: tuple(part.lower() for part in p)):
+                parent = self.snippet_list
+                for part in path:
+                    parent = self._ensure_group(parent, part)
+                for trigger, snippet in groups[path]:
+                    self._add_snippet_item(parent, trigger, snippet)
+
+        self.snippet_list.expandAll()
+
+    def _matches_search(self, trigger, snippet, query):
+        """True if the trigger or any expansion text contains the query."""
+        if not query:
+            return True
+        if query in trigger.lower():
+            return True
+        snippet_type = snippet.get("type", "variable")
+        if snippet_type == "variable":
+            haystack = snippet.get("value", "")
+        elif snippet_type == "template":
+            haystack = " ".join(str(v) for v in snippet.get("languages", {}).values())
+        elif snippet_type == "command":
+            haystack = snippet.get("action", "")
+        else:
+            haystack = ""
+        return query in haystack.lower()
+
+    def _sort_items(self, items):
+        """Sort (trigger, snippet) pairs by the selected sort mode, in place."""
+        mode = self.sort_combo.currentData()
+        if mode == "recent":
+            items.sort(
+                key=lambda kv: (kv[1].get("last_used") or "0000-00-00T00:00:00", kv[0].lower()),
+                reverse=True,
             )
-        )
+        elif mode == "used":
+            items.sort(key=lambda kv: (-int(kv[1].get("usage", 0)), kv[0].lower()))
+        else:
+            items.sort(key=lambda kv: kv[0].lower())
 
-        for trigger, snippet in sorted_items:
-            item = QListWidgetItem(trigger)
-            item.setData(Qt.UserRole, trigger)
+    def _snippet_tags(self, snippet):
+        """Tags for a snippet, falling back to its legacy category."""
+        tags = snippet.get("tags")
+        if tags:
+            return [t for t in tags if t]
+        category = snippet.get("category", "")
+        return [category] if category and category != "uncategorized" else []
 
-            snippet_type = snippet.get("type", "variable")
-            if snippet_type == "command":
-                item.setForeground(Qt.darkRed)
-                item.setToolTip(f"Command | Category: {snippet.get('category', 'uncategorized')}")
-            elif snippet_type == "template":
-                item.setForeground(Qt.darkBlue)
-                item.setToolTip(f"Template | Category: {snippet.get('category', 'uncategorized')}")
-            else:
-                item.setForeground(Qt.darkGreen)
-                item.setToolTip(f"Variable | Category: {snippet.get('category', 'uncategorized')}")
+    def _group_paths(self, snippet, group_mode):
+        """Group paths (each a list of parts) under which a snippet appears."""
+        if group_mode == "type":
+            return [[snippet.get("type", "variable")]]
+        if group_mode == "tag":
+            tags = list(dict.fromkeys(self._snippet_tags(snippet)))
+            return [[t] for t in tags] if tags else [["uncategorized"]]
+        # category: '/' separates nested folder levels
+        category = snippet.get("category", "uncategorized") or "uncategorized"
+        return [category.split("/")]
 
-            self.snippet_list.addItem(item)
+    def _ensure_group(self, parent, name):
+        """Find or create a (non-selectable) group node named `name`.
+
+        `parent` may be the tree widget itself (root level) or another group
+        item (nested folders).
+        """
+        if isinstance(parent, QTreeWidget):
+            count = parent.topLevelItemCount()
+            get = parent.topLevelItem
+        else:
+            count = parent.childCount()
+            get = parent.child
+        for i in range(count):
+            child = get(i)
+            if child.data(0, Qt.UserRole + 1) == name:
+                return child
+        item = QTreeWidgetItem(parent, [name])
+        item.setData(0, Qt.UserRole + 1, name)
+        item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+        return item
+
+    def _add_snippet_item(self, parent, trigger, snippet):
+        item = QTreeWidgetItem(parent, [trigger])
+        item.setData(0, Qt.UserRole, trigger)
+        snippet_type = snippet.get("type", "variable")
+        category = snippet.get("category", "uncategorized")
+        if snippet_type == "command":
+            item.setForeground(0, Qt.darkRed)
+            item.setToolTip(0, f"Command | Category: {category}")
+        elif snippet_type == "template":
+            item.setForeground(0, Qt.darkBlue)
+            item.setToolTip(0, f"Template | Category: {category}")
+        else:
+            item.setForeground(0, Qt.darkGreen)
+            item.setToolTip(0, f"Variable | Category: {category}")
+        return item
 
     def on_category_changed(self, category):
         """Handle category dropdown change"""
@@ -443,6 +606,9 @@ class TexterUI(QMainWindow):
             return
 
         trigger = selected[0].data(Qt.UserRole)
+        if not trigger:  # a group header, not a snippet
+            self.preview_text.clear()
+            return
         snippet = self.daemon.snippets.get(trigger)
         if not snippet:
             self.preview_text.clear()
@@ -451,8 +617,15 @@ class TexterUI(QMainWindow):
         preview = self.get_expansion_preview(snippet)
         snippet_category = snippet.get("category", "uncategorized")
         snippet_type = snippet.get("type", "variable")
+        tags = snippet.get("tags") or []
+        used = int(snippet.get("usage", 0))
+        last_used = snippet.get("last_used", "never")
 
-        self.preview_text.setText(f"Category: {snippet_category}\nType: {snippet_type}\nTrigger: {trigger}\n\nExpands to:\n{preview}")
+        self.preview_text.setText(
+            f"Category: {snippet_category}\nTags: {', '.join(tags) if tags else 'none'}\n"
+            f"Type: {snippet_type}\nTrigger: {trigger}\n"
+            f"Used: {used} times (last: {last_used})\n\nExpands to:\n{preview}"
+        )
 
     def on_language_changed(self, lang):
         self.refresh_snippet_list()
@@ -491,6 +664,8 @@ class TexterUI(QMainWindow):
             return
 
         trigger = selected[0].data(Qt.UserRole)
+        if not trigger:  # group headers aren't editable
+            return
         snippet = {"trigger": trigger, **self.daemon.snippets.get(trigger, {})}
 
         categories = self.daemon.get_categories() if self.daemon else []
@@ -509,6 +684,8 @@ class TexterUI(QMainWindow):
             return
 
         trigger = selected[0].data(Qt.UserRole)
+        if not trigger:  # group headers aren't deletable
+            return
         reply = QMessageBox.question(self, "Confirm", f"Delete '{trigger}'?")
         if reply == QMessageBox.Yes:
             self.daemon.delete_snippet(trigger)

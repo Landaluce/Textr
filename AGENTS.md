@@ -9,7 +9,7 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
 
 **Texter MVP** is a Python application that provides text snippet expansion via keyboard monitoring. It consists of:
 - **Daemon** (`daemon.py`): Background process that monitors keyboard input and expands snippets
-- **UI** (`ui.py`): PySide6-based GUI with system tray integration for managing snippets and settings
+- **UI** (`ui.py`): PySide6-based GUI with system tray integration for managing snippets and settings; the snippet list is a `QTreeWidget` (`SnippetTreeWidget`) that groups by category folders/type/tag with search and sorting
 - **Core** (`main.py`): Application entry point that initializes the UI
 
 ## Quick Start Commands
@@ -33,6 +33,7 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
 - **Input backends**: pynput (X11/XWayland) and `input_wayland.py` (evdev, native Wayland) both emit normalized `keys.Key` objects (`name`/`char`) consumed by the backend-agnostic `_handle_key`
 - **Keyboard layouts**: `input_wayland.py` maps evdev keycodes through `LAYOUTS` (`us`/`uk`/`de`/`fr`/`es`, each entry `(level1, level2, altgr)`); the active layout comes from `config["layout"]` and is selectable in the UI settings
 - **Prefix disambiguation**: when a trigger is the prefix of another (`:d` vs `:dt`), `_handle_key` defers expansion via `pending_trigger` until the next key disambiguates (longer trigger, boundary key/char fires the short one, or abort)
+- **Snippet grouping/tags/usage**: snippets carry an optional `tags` list (legacy `category` is normalized into `tags` on load); the daemon records `usage`/`last_used` on every expansion (`_record_usage`) for the UI's recently/most-used sorting
 - **Data paths**: `_resolve_path()` prefers `$TEXTR_CONFIG_DIR`, then a legacy CWD file, then `$XDG_CONFIG_HOME/textr/`
 
 ### ui.py
