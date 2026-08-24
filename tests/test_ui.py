@@ -237,6 +237,36 @@ class TestToggleButtonText:
         assert "Human Typing: disabled" in window.status_label.text()
 
 
+class TestSelectionPreserved:
+    def test_selection_survives_language_change(self, window, d):
+        sig_item = find_snippet_item(window.snippet_list, "sig")
+        window.snippet_list.setCurrentItem(sig_item)
+
+        window.on_language_changed("rust")
+
+        selected = [i.data(0, Qt.UserRole) for i in window.snippet_list.selectedItems()]
+        assert selected == ["sig"]
+        assert "Trigger: sig" in window.preview_text.toPlainText()
+
+    def test_selection_survives_search_refresh(self, window):
+        sig_item = find_snippet_item(window.snippet_list, "sig")
+        window.snippet_list.setCurrentItem(sig_item)
+
+        window.search_input.setText("sig")
+
+        selected = [i.data(0, Qt.UserRole) for i in window.snippet_list.selectedItems()]
+        assert selected == ["sig"]
+
+    def test_selection_survives_grouping_change(self, window):
+        sig_item = find_snippet_item(window.snippet_list, "sig")
+        window.snippet_list.setCurrentItem(sig_item)
+
+        window.group_combo.setCurrentIndex(window.group_combo.findData("none"))
+
+        selected = [i.data(0, Qt.UserRole) for i in window.snippet_list.selectedItems()]
+        assert selected == ["sig"]
+
+
 class TestLanguagePersistence:
     def test_language_change_persists_to_config(self, window, d):
         window.on_language_changed("rust")

@@ -67,6 +67,23 @@ class SnippetTreeWidget(QTreeWidget):
             node = node.parent()
         return list(reversed(parts))
 
+    def find_item(self, trigger):
+        """Return the tree item for a snippet trigger, or None."""
+        def walk(item):
+            if item.data(0, Qt.UserRole) == trigger:
+                return item
+            for i in range(item.childCount()):
+                found = walk(item.child(i))
+                if found:
+                    return found
+            return None
+
+        for i in range(self.topLevelItemCount()):
+            found = walk(self.topLevelItem(i))
+            if found:
+                return found
+        return None
+
 
 class AddSnippetDialog(QDialog):
     def __init__(self, parent=None, snippet=None, categories=None):
@@ -463,6 +480,13 @@ class TexterUI(QMainWindow):
         return ""
 
     def refresh_snippet_list(self):
+        # Remember the selection so rebuilds (search, language switch, daemon
+        # refresh) don't drop it - the user shouldn't have to re-click.
+        selected_before = None
+        selected = self.snippet_list.selectedItems()
+        if selected:
+            selected_before = selected[0].data(0, Qt.UserRole)
+
         self.snippet_list.clear()
 
         if not self.daemon:
@@ -506,6 +530,11 @@ class TexterUI(QMainWindow):
                     self._add_snippet_item(parent, trigger, snippet)
 
         self.snippet_list.expandAll()
+
+        if selected_before:
+            item = self.snippet_list.find_item(selected_before)
+            if item is not None:
+                self.snippet_list.setCurrentItem(item)
 
     def _matches_search(self, trigger, snippet, query):
         """True if the trigger or any expansion text contains the query."""
