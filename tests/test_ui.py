@@ -35,6 +35,24 @@ def top_level_groups(tree):
     return out
 
 
+def find_snippet_item(tree, trigger):
+    """The tree item for a given snippet trigger, or None."""
+    def walk(item):
+        if item.data(0, Qt.UserRole) == trigger:
+            return item
+        for i in range(item.childCount()):
+            found = walk(item.child(i))
+            if found:
+                return found
+        return None
+
+    for i in range(tree.topLevelItemCount()):
+        found = walk(tree.topLevelItem(i))
+        if found:
+            return found
+    return None
+
+
 @pytest.fixture(scope="session")
 def qapp():
     app = QApplication.instance() or QApplication([])
@@ -171,6 +189,33 @@ class TestDialogTags:
             "trigger": "tg", "type": "variable", "value": "v", "tags": ["a", "b"]
         })
         assert dialog.tags_input.text() == "a, b"
+
+
+class TestEditSnippet:
+    def test_edit_updates_selected_snippet(self, window, d, monkeypatch):
+        from PySide6.QtWidgets import QDialog
+        from ui import AddSnippetDialog
+
+        sig_item = find_snippet_item(window.snippet_list, "sig")
+        window.snippet_list.setCurrentItem(sig_item)
+        assert window.snippet_list.selectedItems()[0].data(0, Qt.UserRole) == "sig"
+
+        def fake_exec(dialog):
+            dialog.value_input.setPlainText("edited value")
+            return QDialog.Accepted
+
+        monkeypatch.setattr(AddSnippetDialog, "exec", fake_exec)
+        window.edit_snippet()
+        assert d.snippets["sig"]["value"] == "edited value"
+
+    def test_selection_shows_preview(self, window):
+        sig_item = find_snippet_item(window.snippet_list, "sig")
+        window.snippet_list.setCurrentItem(sig_item)
+        assert "Trigger: sig" in window.preview_text.toPlainText()
+
+    def test_edit_with_no_selection_is_noop(self, window, d):
+        window.snippet_list.clearSelection()
+        window.edit_snippet()  # must not raise
 
 
 class TestStateSync:
