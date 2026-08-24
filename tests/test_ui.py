@@ -132,12 +132,22 @@ class TestSnippetGrouping:
 
 
 class TestSubGrouping:
-    def test_default_is_no_subgroup(self, window):
-        assert window.subgroup_combo.currentData() == "none"
-        # snippets are direct children of the category group (single level)
-        group = window.snippet_list.topLevelItem(0)
-        assert group.data(0, Qt.UserRole + 1) == "test"
-        assert group.child(0).data(0, Qt.UserRole) == ":d"
+    def test_default_is_category_then_tag(self, window, d):
+        assert window.group_combo.currentData() == "category"
+        assert window.subgroup_combo.currentData() == "tag"
+        # A tag equal to the category collapses (redundant); a distinct tag
+        # nests a second level under the category.
+        d.add_or_update_snippet("tw", {
+            "type": "variable", "value": "v", "category": "test", "tags": ["web"],
+        })
+        window.refresh_snippet_list()
+        category = window.snippet_list.topLevelItem(0)
+        assert category.data(0, Qt.UserRole + 1) == "test"
+        # name-sorted: :d, longtrig, sig collapse into the category; web nests.
+        assert category.child(0).data(0, Qt.UserRole) == ":d"
+        web = category.child(3)
+        assert web.data(0, Qt.UserRole + 1) == "web"
+        assert web.child(0).data(0, Qt.UserRole) == "tw"
 
     def test_category_then_type(self, window, d):
         d.add_or_update_snippet("ff", {"type": "variable", "value": "v", "category": "other"})

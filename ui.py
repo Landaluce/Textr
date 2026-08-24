@@ -397,6 +397,7 @@ class TexterUI(QMainWindow):
         self.subgroup_combo.addItem("Category", "category")
         self.subgroup_combo.addItem("Type", "type")
         self.subgroup_combo.addItem("Tag", "tag")
+        self.subgroup_combo.setCurrentIndex(self.subgroup_combo.findData("tag"))
         self.subgroup_combo.currentIndexChanged.connect(self.refresh_snippet_list)
         view_layout.addWidget(self.subgroup_combo)
         left_layout.addLayout(view_layout)
@@ -696,7 +697,9 @@ class TexterUI(QMainWindow):
         ``sub_mode`` adds a second level ("then by") inside each primary group.
         """
         primary = self._primary_paths(snippet, group_mode)
-        if sub_mode == "none":
+        # Same mode twice (e.g. "tag then tag") is a degenerate choice: with
+        # multiple tags the paths would cross-product. Treat it as one level.
+        if sub_mode == "none" or sub_mode == group_mode:
             return primary
         subs = self._sub_paths(snippet, sub_mode)
         paths = []
