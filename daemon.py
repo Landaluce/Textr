@@ -13,6 +13,16 @@ import threading
 import traceback
 from pynput import keyboard
 
+# Modifier name -> key for the configurable paste shortcut (see Daemon._paste_hotkey_parts).
+_PASTE_MODIFIERS = {
+    "ctrl": keyboard.Key.ctrl,
+    "leftctrl": keyboard.Key.ctrl,
+    "shift": keyboard.Key.shift,
+    "leftshift": keyboard.Key.shift,
+    "alt": keyboard.Key.alt,
+    "leftalt": keyboard.Key.alt,
+}
+
 
 class Daemon:
     def __init__(self, snippets_file="snippets.json"):
@@ -82,6 +92,9 @@ class Daemon:
             "layout": "us",
             # Language used for template snippets; persisted so it survives restarts.
             "language": "python",
+            # Shortcut used to paste expansions in clipboard mode. Some
+            # terminals expect a different combo than Ctrl+Shift+V.
+            "paste_hotkey": "ctrl+shift+v",
         }
         if os.path.exists(self.config_file):
             try:
@@ -330,12 +343,15 @@ class Daemon:
                     # Paste mode with jitter
                     pyperclip.copy(final_text)
                     time.sleep(random.uniform(0.05, 0.09))
-                    self.controller.press(keyboard.Key.shift)
-                    self.controller.press(keyboard.Key.ctrl)
-                    self.controller.press("v")
-                    self.controller.release("v")
-                    self.controller.release(keyboard.Key.ctrl)
-                    self.controller.release(keyboard.Key.shift)
+                    mods, key = self._paste_hotkey_parts(
+                        self.config.get("paste_hotkey", "ctrl+shift+v")
+                    )
+                    for mod in mods:
+                        self.controller.press(mod)
+                    self.controller.press(key)
+                    self.controller.release(key)
+                    for mod in reversed(mods):
+                        self.controller.release(mod)
                     time.sleep(random.uniform(0.3, 0.8))
 
                 # Move the caret back to the {cursor} position
@@ -416,6 +432,25 @@ class Daemon:
             self._wayland_run(["ydotool", "key", "105"])  # KEY_LEFT
             time.sleep(0.02)
 
+
+    def _paste_hotkey_parts(self, combo):
+        """Parse a 'ctrl+shift+v'-style combo into (modifier keys, final key).
+
+        The final key may be a single character (e.g. "v") or a named key
+        (e.g. "insert", "enter"). Unknown modifiers fall back to Ctrl so a
+        typo in config still produces a working paste shortcut.
+        """
+        parts = [p.strip().lower() for p in (combo or "").split("+") if p.strip()]
+        if not parts:
+            parts = ["ctrl", "shift", "v"]
+        mods = []
+        for name in parts[:-1]:
+            mods.append(_PASTE_MODIFIERS.get(name, keyboard.Key.ctrl))
+        key_name = parts[-1]
+        key = getattr(keyboard.Key, key_name, None)
+        if key is None:
+            key = key_name  # single characters ("v") work directly with the controller
+        return mods, key
 
     def _type_humanlike(self, text):
         """

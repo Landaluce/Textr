@@ -322,6 +322,8 @@ class TexterUI(QMainWindow):
             self.daemon.config["name"] = self.name_edit.text().strip()
             self.daemon.config["email"] = self.email_edit.text().strip()
             self.daemon.config["layout"] = self.layout_combo.currentData()
+            hotkey = self.paste_hotkey_edit.text().strip()
+            self.daemon.config["paste_hotkey"] = hotkey or "ctrl+shift+v"
             self.daemon.save_config()
             self.status_label.setText("Status: Settings saved!")
 
@@ -460,11 +462,17 @@ class TexterUI(QMainWindow):
             self.layout_combo.addItem(layout, layout)
         layout_index = self.layout_combo.findData(current_layout)
         self.layout_combo.setCurrentIndex(max(layout_index, 0))
+        self.paste_hotkey_edit = QLineEdit(
+            self.daemon.config.get("paste_hotkey", "ctrl+shift+v")
+            if (self.daemon and hasattr(self.daemon, "config")) else "ctrl+shift+v"
+        )
+        self.paste_hotkey_edit.setPlaceholderText("ctrl+shift+v")
         self.save_settings_btn = QPushButton("Save Settings")
         self.save_settings_btn.clicked.connect(self.save_user_config)
         settings_layout.addRow("Name:", self.name_edit)
         settings_layout.addRow("Email:", self.email_edit)
         settings_layout.addRow("Keyboard layout:", self.layout_combo)
+        settings_layout.addRow("Paste shortcut:", self.paste_hotkey_edit)
         settings_layout.addRow(self.save_settings_btn)
         right_layout.addWidget(settings_group)
 
@@ -789,6 +797,49 @@ class TexterUI(QMainWindow):
     def restart_app(self):
         self.quit_app()
 
+    def trigger_conflicts(self, trigger, exclude=None):
+        """Human-readable conflict messages for a trigger, if any.
+
+        Covers exact duplicates (silent overwrite) and the prefix-deferral
+        cases (a trigger that is a prefix of another, or vice versa), so the
+        user isn't surprised by the daemon's boundary-key behavior.
+        """
+        if not self.daemon:
+            return []
+        conflicts = []
+        others = [t for t in self.daemon.snippets if t != exclude]
+        if trigger in others:
+            conflicts.append(
+                f"'{trigger}' already exists - adding it will overwrite the existing snippet."
+            )
+        longer = [t for t in others if t.startswith(trigger)]
+        if longer:
+            conflicts.append(
+                f"'{trigger}' is a prefix of {', '.join(repr(t) for t in longer)} - "
+                "it will only expand when a boundary key (space/enter/punctuation) follows."
+            )
+        shorter = [t for t in others if trigger.startswith(t)]
+        if shorter:
+            conflicts.append(
+                f"'{trigger}' extends existing {', '.join(repr(t) for t in shorter)} - "
+                "those will now only expand when a boundary key follows."
+            )
+        return conflicts
+
+    def _confirm_trigger_conflicts(self, trigger, exclude=None):
+        """Warn about trigger conflicts; return True if the user wants to proceed."""
+        conflicts = self.trigger_conflicts(trigger, exclude=exclude)
+        if not conflicts:
+            return True
+        message = "Potential trigger conflicts:\n\n" + "\n".join(
+            f"\u2022 {c}" for c in conflicts
+        ) + "\n\nSave anyway?"
+        reply = QMessageBox.question(
+            self, "Trigger conflict", message,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
+
     def add_snippet(self):
         categories = self.daemon.get_categories() if self.daemon else []
         dialog = AddSnippetDialog(self, categories=categories)
@@ -796,6 +847,8 @@ class TexterUI(QMainWindow):
             snippet = dialog.get_snippet()
             if snippet and self.daemon:
                 trigger = snippet.pop("trigger")
+                if not self._confirm_trigger_conflicts(trigger):
+                    return
                 self.daemon.add_or_update_snippet(trigger, snippet)
                 self.refresh_snippet_list()
                 self.status_label.setText(f"Status: Added snippet '{trigger}' (saved)")
@@ -816,6 +869,8 @@ class TexterUI(QMainWindow):
             new_snippet = dialog.get_snippet()
             if new_snippet and self.daemon:
                 new_trigger = new_snippet.pop("trigger")
+                if not self._confirm_trigger_conflicts(new_trigger, exclude=trigger):
+                    return
                 self.daemon.replace_snippet(trigger, new_trigger, new_snippet)
                 self.refresh_snippet_list()
                 self.status_label.setText(f"Status: Edited snippet '{new_trigger}' (saved)")
@@ -901,9 +956,12 @@ class TexterUI(QMainWindow):
         print(f"UI: Human typing {'enabled' if checked else 'disabled'}")
 
     def quit_button(self):
-        """Button handler for manual quit"""
-        if self.daemon:
-            self.daemon.stop()
+        """Button handler for manual quit.
+
+        Same code path as the window's X button (closeEvent) and the tray
+        Quit action: quit_app() saves snippets, stops the daemon, hides the
+        tray icon, and exits the application.
+        """
         self.quit_app()
 
     def import_json(self):

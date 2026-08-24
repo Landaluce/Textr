@@ -19,9 +19,10 @@ dependencies = [
 
 [project.scripts]
 textr = "main:main"
+textr-diag = "diag:main"
 
 [tool.setuptools]
-py-modules = ["daemon", "ui", "main", "stylesheet", "keys", "input_wayland"]
+py-modules = ["daemon", "ui", "main", "stylesheet", "keys", "input_wayland", "diag"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

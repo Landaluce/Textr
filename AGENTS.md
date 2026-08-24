@@ -18,6 +18,7 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
 |---------|---------|
 | `bash run.sh` or `python3 main.py` | Start the application from the source tree (launches daemon + UI) |
 | `python3 -m pip install .` then `textr` | Install as a package and start it (console entry point) |
+| `python3 -m diag` or `textr-diag` | Environment diagnostics: session type, input devices, tool/permission checks (add `--listen 5` for live keycode capture) |
 | `python3 -c "from daemon import Daemon; d = Daemon(); d.load_snippets()"` | Test daemon snippet loading |
 | `python3 -m pip install -r requirements.txt` | Install dependencies (PySide6, pynput, pyperclip, evdev) |
 
@@ -29,6 +30,7 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
   - `load_snippets()`: Loads snippet definitions from `snippets.json`
   - `load_config()`: Loads user settings from `config.json`
   - `save_config()`: Persists configuration changes
+- **Paste shortcut**: clipboard-mode expansion uses `config["paste_hotkey"]` (default `ctrl+shift+v`), parsed by `_paste_hotkey_parts()` into modifier keys + final key; configurable in the UI settings
 - **Snippet Types**: `variable` (static text), `template` (language-specific code), `command` (actions like toggle_pause)
 - **Input backends**: pynput (X11/XWayland) and `input_wayland.py` (evdev, native Wayland) both emit normalized `keys.Key` objects (`name`/`char`) consumed by the backend-agnostic `_handle_key`
 - **Keyboard layouts**: `input_wayland.py` maps evdev keycodes through `LAYOUTS` (`us`/`uk`/`de`/`fr`/`es`, each entry `(level1, level2, altgr)`); the active layout comes from `config["layout"]` and is selectable in the UI settings
@@ -42,7 +44,9 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
   - `TexterUI`: Main window with snippet management, category filtering, and configuration
   - `AddSnippetDialog`: Modal for creating/editing snippets
   - System tray integration for minimize/restore
-- **Settings UI**: Configure name, email, writing mode, debug verbosity
+- **Settings UI**: Configure name, email, keyboard layout, paste shortcut, writing mode, debug verbosity
+- **Trigger conflict warnings**: `TexterUI.trigger_conflicts()` flags duplicate triggers and prefix-deferral collisions when adding/editing snippets (`_confirm_trigger_conflicts` warns before saving)
+- **Quit paths**: the window's X button (via `closeEvent`), the Quit button, and the tray Quit action all route through `quit_app()` (saves snippets, stops daemon, hides tray) - keep them unified when changing quit behavior
 
 ### Configuration Files
 - **config.json**: User settings (name, email, custom options) - loaded at startup, persisted on save

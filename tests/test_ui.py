@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from ui import AddSnippetDialog, TexterUI
 
@@ -356,6 +356,75 @@ class TestHighlightClipping:
         # view paints full-row below the delegate. (Property form with ':' so
         # comments mentioning it don't count.)
         assert dark_stylesheet.count("selection-background-color:") == 1
+
+
+class TestQuitPaths:
+    def test_close_button_and_quit_button_share_single_path(self, window, monkeypatch):
+        calls = []
+        monkeypatch.setattr(window, "quit_app", lambda: calls.append("quit_app"))
+        window.close()  # the X button -> closeEvent
+        window.quit_button()
+        # No extra daemon.stop() in quit_button - both go through quit_app only.
+        assert calls == ["quit_app", "quit_app"]
+
+    def test_close_event_stops_daemon_and_saves_snippets(self, window, d, monkeypatch):
+        stops = []
+        monkeypatch.setattr(d, "stop", lambda: stops.append("stop"))
+        saved = []
+        monkeypatch.setattr(d, "save_snippets", lambda: saved.append("save"))
+        window.close()
+        assert stops == ["stop"]
+        assert saved == ["save"]
+        assert window.really_quit is True
+
+
+class TestPasteHotkeySetting:
+    def test_field_defaults_to_config(self, window, d):
+        assert window.paste_hotkey_edit.text() == "ctrl+shift+v"
+
+    def test_save_settings_persists_hotkey(self, window, d):
+        window.paste_hotkey_edit.setText("ctrl+alt+v")
+        window.save_user_config()
+        assert d.config["paste_hotkey"] == "ctrl+alt+v"
+
+    def test_blank_field_falls_back_to_default(self, window, d):
+        window.paste_hotkey_edit.setText("   ")
+        window.save_user_config()
+        assert d.config["paste_hotkey"] == "ctrl+shift+v"
+
+
+class TestTriggerConflicts:
+    def test_exact_duplicate_detected(self, window, d):
+        conflicts = window.trigger_conflicts("sig")
+        assert any("already exists" in c for c in conflicts)
+
+    def test_extending_existing_detected(self, window, d):
+        # "sigx" extends "sig": the existing snippet is deferred to a boundary.
+        conflicts = window.trigger_conflicts("sigx")
+        assert any("extends existing 'sig'" in c for c in conflicts)
+
+    def test_prefix_of_existing_detected(self, window, d):
+        # "s" is a prefix of "sig": the new trigger defers to a boundary.
+        conflicts = window.trigger_conflicts("s")
+        assert any("is a prefix of 'sig'" in c for c in conflicts)
+
+    def test_no_conflicts(self, window, d):
+        assert window.trigger_conflicts("zzz") == []
+
+    def test_edit_excludes_own_trigger(self, window, d):
+        assert window.trigger_conflicts("sig", exclude="sig") == []
+
+    def test_confirm_blocks_on_no(self, window, d, monkeypatch):
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+        assert window._confirm_trigger_conflicts("sig") is False
+
+    def test_confirm_allows_on_yes(self, window, d, monkeypatch):
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        assert window._confirm_trigger_conflicts("sig") is True
+
+    def test_confirm_passes_through_without_conflicts(self, window, d, monkeypatch):
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not prompt")))
+        assert window._confirm_trigger_conflicts("zzz") is True
 
 
 class TestEditSnippet:

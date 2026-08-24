@@ -287,6 +287,58 @@ class TestNormalizedKeys:
         assert d.buffer == ""
 
 
+class TestPasteHotkey:
+    def test_default_combo_parses(self, d):
+        mods, key = d._paste_hotkey_parts("ctrl+shift+v")
+        assert mods == [keyboard.Key.ctrl, keyboard.Key.shift]
+        assert key == "v"
+
+    def test_single_modifier(self, d):
+        mods, key = d._paste_hotkey_parts("ctrl+v")
+        assert mods == [keyboard.Key.ctrl]
+        assert key == "v"
+
+    def test_named_key(self, d):
+        mods, key = d._paste_hotkey_parts("ctrl+shift+insert")
+        assert mods == [keyboard.Key.ctrl, keyboard.Key.shift]
+        assert key == keyboard.Key.insert
+
+    def test_case_insensitive(self, d):
+        mods, key = d._paste_hotkey_parts("Ctrl+Shift+V")
+        assert mods == [keyboard.Key.ctrl, keyboard.Key.shift]
+        assert key == "v"
+
+    def test_empty_combo_falls_back_to_default(self, d):
+        mods, key = d._paste_hotkey_parts("")
+        assert mods == [keyboard.Key.ctrl, keyboard.Key.shift]
+        assert key == "v"
+
+    def test_unknown_modifier_falls_back_to_ctrl(self, d):
+        mods, key = d._paste_hotkey_parts("meta+v")
+        assert mods == [keyboard.Key.ctrl]
+        assert key == "v"
+
+    def test_replace_uses_configured_hotkey(self, d):
+        d.config["paste_hotkey"] = "ctrl+alt+v"
+        type_string(d, " sig")
+        tail = d.controller.events[-6:]
+        assert [action for action, _ in tail] == [
+            "press", "press", "press", "release", "release", "release",
+        ]
+        assert [key for _, key in tail] == [
+            keyboard.Key.ctrl, keyboard.Key.alt, "v",
+            "v", keyboard.Key.alt, keyboard.Key.ctrl,
+        ]
+
+    def test_default_hotkey_still_ctrl_shift_v(self, d):
+        type_string(d, " sig")
+        tail = d.controller.events[-6:]
+        assert [key for _, key in tail] == [
+            keyboard.Key.ctrl, keyboard.Key.shift, "v",
+            "v", keyboard.Key.shift, keyboard.Key.ctrl,
+        ]
+
+
 class TestDataPaths:
     def test_xdg_fallback_without_legacy_file(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
