@@ -194,10 +194,13 @@ class AddSnippetDialog(QDialog):
         self.languages_input.setFixedHeight(80)
         layout.addRow("Programming languages (JSON):", self.languages_input)
 
-        # Action
+        # Action (and optional value, e.g. the language for set_language)
         self.action_input = QLineEdit()
         self.action_input.setPlaceholderText("For command: set_language, toggle_pause, shutdown")
         layout.addRow("Action:", self.action_input)
+        self.command_value_input = QLineEdit()
+        self.command_value_input.setPlaceholderText("For set_language: the language name, e.g. java")
+        layout.addRow("Value:", self.command_value_input)
 
         # Enabled (default on; disabled snippets never expand)
         self.enabled_check = QCheckBox("Enabled")
@@ -219,6 +222,7 @@ class AddSnippetDialog(QDialog):
                 self.languages_input.setText(json.dumps(langs, indent=2))
             elif self.snippet.get("type") == "command":
                 self.action_input.setText(self.snippet.get("action", ""))
+                self.command_value_input.setText(self.snippet.get("value", ""))
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -227,13 +231,16 @@ class AddSnippetDialog(QDialog):
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.save_btn)
-        btn_layout.addWidget(self.cancel_btn)
         layout.addRow(btn_layout)
-        
+
+        # Apply the initial type-based visibility (new dialogs default to
+        # variable; edit flows call on_type_changed again with their type).
+        self.on_type_changed(self.type_combo.currentText())
 
     def on_type_changed(self, type_val):
         self.languages_input.setHidden(type_val != "template")
         self.action_input.setHidden(type_val != "command")
+        self.command_value_input.setHidden(type_val != "command")
 
     def get_snippet(self):
         trigger = self.trigger_input.text().strip()
@@ -258,6 +265,9 @@ class AddSnippetDialog(QDialog):
                 return None
         elif snippet_type == "command":
             snippet["action"] = self.action_input.text().strip()
+            cmd_value = self.command_value_input.text().strip()
+            if cmd_value:
+                snippet["value"] = cmd_value
 
         return snippet
 
