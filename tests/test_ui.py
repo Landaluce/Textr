@@ -191,6 +191,25 @@ class TestDialogTags:
         assert dialog.tags_input.text() == "a, b"
 
 
+class TestReadability:
+    def test_group_headers_bold_lavender(self, window):
+        group = window.snippet_list.topLevelItem(0)
+        assert group.font(0).bold()
+        assert group.foreground(0).color().name() == "#cba6f7"
+
+    def test_variable_snippet_uses_light_green(self, window):
+        sig_item = find_snippet_item(window.snippet_list, "sig")
+        assert sig_item.foreground(0).color().name() == "#a6e3a1"
+
+    def test_command_snippet_uses_light_red(self, window):
+        d_cmd = find_snippet_item(window.snippet_list, ":d")
+        assert d_cmd.foreground(0).color().name() == "#f38ba8"
+
+    def test_template_snippet_uses_light_blue(self, window):
+        long_item = find_snippet_item(window.snippet_list, "longtrig")
+        assert long_item.foreground(0).color().name() == "#89b4fa"
+
+
 class TestEditSnippet:
     def test_edit_updates_selected_snippet(self, window, d, monkeypatch):
         from PySide6.QtWidgets import QDialog
