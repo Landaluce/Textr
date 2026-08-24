@@ -23,7 +23,7 @@ dark_stylesheet = """
         left: 10px;
         padding: 0 5px;
     }
-    QLineEdit, QTextEdit, QComboBox, QTreeWidget {
+    QLineEdit, QTextEdit, QComboBox {
         background-color: #313244;
         color: #cdd6f4;
         border: 1px solid #45475a;
@@ -31,6 +31,17 @@ dark_stylesheet = """
         padding: 5px;
         selection-background-color: #b4befe;
         selection-color: #11111b;
+    }
+    /* No selection-background-color here: it would make the view paint the
+       row highlight across the full width, gutter included. Selection and
+       hover panels are drawn by SnippetTreeDelegate (ui.py), clipped to the
+       item's own cell. */
+    QTreeWidget {
+        background-color: #313244;
+        color: #cdd6f4;
+        border: 1px solid #45475a;
+        border-radius: 6px;
+        padding: 5px;
     }
     QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QTreeWidget:focus {
         border: 1px solid #b4befe;
@@ -62,18 +73,10 @@ dark_stylesheet = """
         background-color: #a6e3a1;
         color: #11111b;
     }
-    /* No padding/border here: they would make the selection rectangle spill
-       out of the item's own row into the rows above/below (and the group
-       header to its left). Keep the highlight exactly on the clicked row. */
-    QTreeWidget::item:selected {
-        background-color: #b4befe;
-        color: #11111b;
-        border-radius: 4px;
-    }
-    QTreeWidget::item:hover {
-        background-color: #45475a;
-        border-radius: 4px;
-    }
+    /* No QTreeWidget::item rules on purpose: the stylesheet engine stretches
+       ::item backgrounds across the whole row, covering the indentation
+       gutter. Selection/hover panels are painted by SnippetTreeDelegate
+       (ui.py), clipped to the item's own cell. */
     QLabel {
         color: #bac2de;
     }

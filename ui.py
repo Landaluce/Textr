@@ -7,10 +7,13 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QTextEdit, QPushButton, QComboBox,
     QListWidget, QListWidgetItem, QDialog, QFormLayout,
     QMessageBox, QFileDialog, QGroupBox, QSystemTrayIcon, QMenu,
-    QTreeWidget, QTreeWidgetItem, QAbstractItemView
+    QTreeWidget, QTreeWidgetItem, QAbstractItemView,
+    QStyledItemDelegate, QStyle, QStyleOptionViewItem
 )
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor
+from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect
+from PySide6.QtGui import (
+    QIcon, QAction, QPixmap, QPainter, QColor, QPalette, QPainterPath
+)
 
 
 def create_status_icon(color_name):
@@ -23,6 +26,64 @@ def create_status_icon(color_name):
     painter.drawEllipse(2, 2, 12, 12)
     painter.end()
     return QIcon(pixmap)
+
+
+# Matches QTreeWidget background-color in stylesheet.py. The view paints a
+# full-row highlight below the delegate; this erases it from the indentation
+# gutter (the empty area left of the item text).
+TREE_BACKGROUND = QColor("#313244")
+
+
+class SnippetTreeDelegate(QStyledItemDelegate):
+    """Paints selection/hover panels clipped to the item's own cell.
+
+    The view always paints a full-row highlight (palette-based) below the
+    delegate, so the indentation gutter to the left of the text would get
+    tinted too. This delegate instead draws its own panels (Catppuccin
+    colors, rounded) within the cell rect and erases the view's panel from
+    the gutter, so selection never covers the empty indent area.
+    """
+
+    SELECT_BG = QColor("#b4befe")
+    SELECT_FG = QColor("#11111b")
+    HOVER_BG = QColor("#45475a")
+    RADIUS = 4
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        # Keep the style's own panel from stretching into the gutter too.
+        opt.showDecorationSelected = False
+        panel = None
+        if opt.state & QStyle.State_Selected:
+            panel = self.SELECT_BG
+            opt.state &= ~QStyle.State_Selected
+            # Dark text over the light highlight; the item's foreground role
+            # (type color) is baked into palette Text by initStyleOption.
+            opt.palette.setColor(QPalette.Text, self.SELECT_FG)
+            opt.palette.setColor(QPalette.HighlightedText, self.SELECT_FG)
+        elif opt.state & QStyle.State_MouseOver:
+            panel = self.HOVER_BG
+            opt.state &= ~QStyle.State_MouseOver
+        if panel is not None:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing)
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(opt.rect), self.RADIUS, self.RADIUS)
+            painter.fillPath(path, panel)
+            # Erase the view's full-row highlight from the gutter. Only for
+            # snippet rows: group headers keep their expand arrow (drawn by
+            # the view in the gutter) intact on hover.
+            if index.data(Qt.UserRole + 1) is None:  # snippet row, not a group
+                view = opt.widget
+                if view is not None:
+                    cell = view.visualRect(index)
+                    if cell.x() > 0:
+                        painter.fillRect(
+                            QRect(0, opt.rect.top(), cell.x(), opt.rect.height()),
+                            TREE_BACKGROUND,
+                        )
+            painter.restore()
+        super().paint(painter, opt, index)
 
 
 class SnippetTreeWidget(QTreeWidget):
@@ -343,6 +404,7 @@ class TexterUI(QMainWindow):
         # Snippet tree (groupable list); font comes from the QSS stylesheet.
         self.snippet_list = SnippetTreeWidget()
         self.snippet_list.setHeaderHidden(True)
+        self.snippet_list.setItemDelegate(SnippetTreeDelegate(self.snippet_list))
         self.snippet_list.setDragDropMode(QAbstractItemView.InternalMove)
         self.snippet_list.itemSelectionChanged.connect(self.on_selection_changed)
         left_layout.addWidget(self.snippet_list)

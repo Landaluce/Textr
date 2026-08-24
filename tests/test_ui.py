@@ -338,6 +338,21 @@ class TestLanguagePersistence:
             second.tray_icon.hide()
 
 
+class TestHighlightClipping:
+    def test_tree_uses_custom_delegate(self, window):
+        from ui import SnippetTreeDelegate
+        assert isinstance(window.snippet_list.itemDelegate(), SnippetTreeDelegate)
+
+    def test_stylesheet_has_no_full_row_item_rules(self):
+        from stylesheet import dark_stylesheet
+        # ::item rules make the style engine stretch highlights across the
+        # whole row (gutter included); the delegate owns those panels now.
+        assert "QTreeWidget::item" not in dark_stylesheet
+        # selection colors on the tree would map to the palette highlight the
+        # view paints full-row below the delegate.
+        assert dark_stylesheet.count("selection-background-color") == 1
+
+
 class TestEditSnippet:
     def test_edit_updates_selected_snippet(self, window, d, monkeypatch):
         from PySide6.QtWidgets import QDialog
