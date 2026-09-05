@@ -231,3 +231,57 @@ class TestListenerDispatch:
         monkeypatch.setattr(wl.glob, "glob", lambda pattern: [])
         listener = wl.WaylandInputListener()
         assert listener.start() is False
+
+
+class TestReaderRespawn:
+    """The daemon watchdog respawns reader threads that die silently."""
+
+    def test_respawn_recovers_a_silently_dead_reader(self, monkeypatch):
+        fake_ecodes = SimpleNamespace(EV_KEY=1, KEY_A=30)
+        opens = {"count": 0}
+
+        class FakeEvent:
+            def __init__(self, type_, code, value):
+                self.type = type_
+                self.code = code
+                self.value = value
+
+        class FlakyDevice:
+            """Device whose first reader open dies without any events."""
+            name = "flaky keyboard"
+
+            def __init__(self, path):
+                opens["count"] += 1
+
+            def capabilities(self, absinfo=False):
+                return {fake_ecodes.EV_KEY: [wl.KEY_A]}
+
+            def read_loop(self):
+                # Device-open count includes the capabilities scan, so the
+                # first reader open is #2: it ends silently. A respawned
+                # reader (>= 3) delivers keys normally.
+                if opens["count"] >= 3:
+                    yield FakeEvent(1, wl.KEY_A, 1)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(wl, "ecodes", fake_ecodes)
+        monkeypatch.setattr(wl, "evdev", SimpleNamespace(InputDevice=FlakyDevice))
+        monkeypatch.setattr(wl.glob, "glob", lambda pattern: ["/dev/input/event0"])
+
+        received = []
+        listener = wl.WaylandInputListener(on_key=received.append)
+        assert listener.start() is True
+
+        # Simulate the daemon's watchdog loop: respawn while unhealthy.
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if not listener.healthy():
+                listener.respawn()
+            if received:
+                break
+            time.sleep(0.005)
+
+        assert received == [Key(char="a")]
+        listener.stop()

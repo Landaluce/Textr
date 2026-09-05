@@ -1,6 +1,7 @@
 import json
 import re
 import threading
+import time
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -582,3 +583,155 @@ class TestContextVars:
 
     def test_unknown_var_left_untouched(self, d):
         assert d.render_template("{nope}") == "{nope}"
+
+
+class _SilentDeadListener:
+    """pynput Listener stand-in that ends without raising.
+
+    The real pynput X11 listener dies exactly this way when its XRecord
+    context is disabled or the X connection is lost: the thread just ends,
+    so join() returns without an exception.
+    """
+
+    instances = []
+
+    def __init__(self, on_press=None):
+        self.daemon = True
+        _SilentDeadListener.instances.append(self)
+
+    def start(self):
+        pass
+
+    def join(self, *args):
+        pass  # thread already finished silently
+
+    def stop(self):
+        pass
+
+
+class _FakeGlobalHotKeys:
+    def __init__(self, *args, **kwargs):
+        self.daemon = True
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+class TestPynputRestart:
+    """A silently-dead listener must be restarted, not taken down for good."""
+
+    def test_silently_dead_listener_is_restarted(self, d, monkeypatch):
+        monkeypatch.setattr(daemon_mod.keyboard, "Listener", _SilentDeadListener)
+        monkeypatch.setattr(daemon_mod.keyboard, "GlobalHotKeys", _FakeGlobalHotKeys)
+        _SilentDeadListener.instances = []
+
+        thread = threading.Thread(target=d._run_pynput, daemon=True)
+        thread.start()
+        # The fake listener's join() returns instantly, so the restart loop
+        # spins: wait until it has built a fresh listener at least once.
+        deadline = time.time() + 2
+        while time.time() < deadline and len(_SilentDeadListener.instances) < 2:
+            pass
+        d.running = False
+        thread.join(timeout=2)
+
+        # join() returned without raising (silent death), yet the daemon did
+        # not exit: it constructed a new listener and kept listening.
+        assert len(_SilentDeadListener.instances) >= 2
+        assert not thread.is_alive()
+
+    def test_stop_request_ends_loop_without_restart(self, d, monkeypatch):
+        monkeypatch.setattr(daemon_mod.keyboard, "Listener", _SilentDeadListener)
+        monkeypatch.setattr(daemon_mod.keyboard, "GlobalHotKeys", _FakeGlobalHotKeys)
+        _SilentDeadListener.instances = []
+
+        d.running = False  # stop() was requested before the loop started
+        d._run_pynput()
+
+        assert _SilentDeadListener.instances == []
+
+
+class TestUIFocusSuppression:
+    """Keys typed into the manager itself must never expand."""
+
+    def test_ui_focus_ignores_typed_chars(self, d):
+        d.ui_focused = True
+        type_string(d, " sig")
+
+        assert d.buffer == ""
+        assert d.controller.backspaces() == []
+        assert d.snippets["sig"].get("usage", 0) == 0
+
+    def test_losing_focus_resumes_expansion(self, d):
+        d.ui_focused = True
+        type_string(d, " sig")
+
+        d.ui_focused = False
+        type_string(d, " sig")
+
+        assert len(d.controller.backspaces()) == len("sig")
+
+    def test_ui_focus_ignores_command_triggers(self, d):
+        # ':d' is a date command in the fixture: typing it while the manager
+        # is focused must not run it (fixture's d.enabled stays untouched,
+        # nothing pasted, no backspaces).
+        d.add_or_update_snippet(":p", {"type": "command", "action": "toggle_pause", "category": "test"})
+        d.ui_focused = True
+        type_string(d, " :p")
+
+        assert d.enabled is True
+        assert d.controller.backspaces() == []
+
+
+class TestExpansionWorker:
+    """Expansions run on the worker thread once run() starts it."""
+
+    def test_expansion_runs_asynchronously_when_worker_started(self, d):
+        d._start_expansion_worker()
+        try:
+            type_string(d, " sig")  # matches the fixture's "sig" snippet
+
+            # The expansion is now performed by the worker thread rather than
+            # inline in on_press: wait for it to finish.
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                if len(d.controller.backspaces()) == len("sig") and not d.is_expanding:
+                    break
+
+            assert len(d.controller.backspaces()) == len("sig")
+            assert d.buffer == ""
+            assert d.is_expanding is False
+            assert d.snippets["sig"]["usage"] == 1
+        finally:
+            d.running = False
+
+    def test_worker_exception_is_contained_and_recovers(self, d, monkeypatch):
+        real_expand = d._expand
+
+        def boom(trigger):
+            raise RuntimeError("expand failure")
+
+        monkeypatch.setattr(d, "_expand", boom)
+        d._start_expansion_worker()
+        try:
+            d._schedule_expand("sig")
+
+            # The worker must reset is_expanding even when the expansion threw.
+            deadline = time.time() + 2
+            while time.time() < deadline and d.is_expanding:
+                pass
+            assert d.is_expanding is False
+
+            # The daemon stays functional once the fault is gone.
+            monkeypatch.setattr(d, "_expand", real_expand)
+            type_string(d, " sig")
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                if len(d.controller.backspaces()) == len("sig") and not d.is_expanding:
+                    break
+            assert len(d.controller.backspaces()) == len("sig")
+        finally:
+            d.running = False
