@@ -307,13 +307,35 @@ class TexterUI(QMainWindow):
         if daemon:
             daemon.ui = self
         self.app = None
+        self._focus_app = None
         self.quit_requested.connect(self.quit_app)
-        self.daemon_command.connect(self.handle_daemon_command)
+        self.daemon_command.connect(self.handle_daemon_command, Qt.QueuedConnection)
         self.setup_ui()
+        self._track_app_focus(QApplication.instance())
 
     def set_app(self, app):
         """Set the QApplication reference"""
         self.app = app
+        self._track_app_focus(app)
+
+    def _track_app_focus(self, app):
+        """Subscribe to focus changes exactly once per QApplication."""
+        if app is not None and app is not self._focus_app:
+            self._focus_app = app
+            app.focusChanged.connect(self._on_app_focus_changed)
+
+    def _on_app_focus_changed(self, old, now):
+        """Suppress trigger detection while the manager itself is focused.
+
+        The daemon's global keyboard capture sees keystrokes aimed at this
+        window too. Without this, typing inside the snippet editor (add/edit
+        dialogs, search box) could fire an existing snippet - including
+        control commands like toggle_pause or shutdown - instead of editing
+        text. QApplication.focusChanged reports None when focus leaves this
+        application, so the flag follows the user between windows.
+        """
+        if self.daemon:
+            self.daemon.ui_focused = now is not None
 
     def handle_daemon_command(self, action):
         """Run daemon-requested UI actions on the GUI thread.
@@ -868,9 +890,15 @@ class TexterUI(QMainWindow):
 
     def bring_to_front(self):
         self.show()
-        self.showNormal()
+        self.setWindowState(Qt.WindowNoState)
         self.raise_()
         self.activateWindow()
+        self.setFocus()
+        # On GNOME/X11, activateWindow() alone may not steal focus.
+        # requestActivate() on the window handle is more reliable.
+        handle = self.windowHandle()
+        if handle:
+            handle.requestActivate()
 
     def restart_app(self):
         self.quit_app()

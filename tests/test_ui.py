@@ -1,5 +1,6 @@
 import json
 import os
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -67,6 +68,34 @@ def window(qapp, d):
     yield w
     w.status_timer.stop()
     w.tray_icon.hide()
+
+
+class TestUIFocusSuppression:
+    """Typing in the manager must not fire snippets (e.g. ':p' pauses)."""
+
+    def test_focus_change_updates_daemon_flag(self, window, d):
+        window._on_app_focus_changed(None, window.search_input)
+        assert d.ui_focused is True
+        window._on_app_focus_changed(window.search_input, None)
+        assert d.ui_focused is False
+
+    def test_typing_into_manager_does_not_expand(self, window, d):
+        window._on_app_focus_changed(None, window.search_input)
+        assert d.ui_focused is True
+
+        for ch in " sig":
+            d.on_press(SimpleNamespace(char=ch))
+        assert d.buffer == ""
+        assert d.controller.backspaces() == []
+
+    def test_focus_leaving_manager_restores_expansion(self, window, d):
+        window._on_app_focus_changed(None, window.search_input)
+        window._on_app_focus_changed(window.search_input, None)
+        assert d.ui_focused is False
+
+        for ch in " sig":
+            d.on_press(SimpleNamespace(char=ch))
+        assert len(d.controller.backspaces()) == len("sig")
 
 
 class TestTrayToggle:

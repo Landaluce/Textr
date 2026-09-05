@@ -4,6 +4,7 @@ import re
 import pyperclip
 import json
 import os
+import queue
 import random
 import math
 import shutil
@@ -33,7 +34,21 @@ class Daemon:
         self.max_buffer = 100
         self.running = True
         self.enabled = True
+        # True while the manager window (or one of its dialogs) has keyboard
+        # focus. Keys aimed at the app's own UI must never be treated as
+        # trigger input: typing ':p' or ':q' into the snippet editor would
+        # otherwise fire those control commands. Kept in sync by TexterUI via
+        # QApplication.focusChanged.
+        self.ui_focused = False
         self.is_expanding = False
+        # Expansions run on a dedicated worker thread (started by run()) so
+        # the keyboard listener never blocks on the multi-second paste/typing
+        # sleeps in replace(). A blocked listener is what starves the input
+        # backend (pynput's XRecord event loop / the evdev readers) and makes
+        # it die after a while. Tests that drive on_press directly never start
+        # the worker and expand inline instead.
+        self._expansion_queue = queue.Queue()
+        self._expansion_thread = None
         # Native Wayland sessions can't use pynput's X11 backend; typing
         # output then falls back to ydotool (see _wayland_replace).
         self.wayland = self.is_wayland()
@@ -740,18 +755,74 @@ class Daemon:
             self.replace(trigger, expansion)
         return True
 
+    def _start_expansion_worker(self):
+        """Start the thread that performs expansions.
+
+        replace() and _type_humanlike() sleep for a second or more while
+        injecting output. Running those sleeps on the keyboard listener
+        thread blocks the input backend (pynput's XRecord event loop, the
+        evdev readers), which is what makes listeners die after a while; the
+        worker keeps the listener free to keep reading keys.
+        """
+        if self._expansion_thread is not None:
+            return
+        self._expansion_thread = threading.Thread(
+            target=self._expansion_worker, daemon=True
+        )
+        self._expansion_thread.start()
+
+    def _expansion_worker(self):
+        """Expansion worker body: pulls triggers off the queue and expands them."""
+        while self.running:
+            try:
+                trigger = self._expansion_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if trigger is None:
+                break
+            try:
+                self._expand(trigger)
+            except Exception:
+                print("ERROR: exception in expansion worker:")
+                traceback.print_exc()
+            finally:
+                self.is_expanding = False
+
+    def _schedule_expand(self, trigger):
+        """Expand `trigger`, delegating to the worker thread when it is running.
+
+        is_expanding is set synchronously so keys - including the ones the
+        daemon injects while outputting - are ignored from this moment until
+        the worker finishes, exactly like inline expansion, but without
+        blocking the listener thread for the duration of the paste/typing.
+        """
+        if self._expansion_thread is None or not self._expansion_thread.is_alive():
+            return self._expand(trigger)
+        self.is_expanding = True
+        self._expansion_queue.put(trigger)
+        return True
+
     def _fire_pending(self):
         """Expand the deferred trigger (a boundary key or char completed it)."""
         trigger = self.pending_trigger
         self.pending_trigger = None
         if trigger is not None:
-            self._expand(trigger)
+            self._schedule_expand(trigger)
 
     def _handle_key(self, key):
         if self.debugging and self.debug:
             print(f"DEBUG: Key pressed: {key}, Buffer: '{self.buffer}'")
 
         if self.is_expanding:
+            return True
+
+        # Ignore keys typed into the manager itself (add/edit dialogs, search
+        # box...): they must never expand, or the user's own editing would
+        # fire triggers and control commands. Keep the buffer clean so a
+        # half-typed word doesn't survive a focus switch.
+        if self.ui_focused:
+            self.buffer = ""
+            self.pending_trigger = None
             return True
 
         name = getattr(key, "name", None)
@@ -803,7 +874,7 @@ class Daemon:
                 self.pending_trigger = completed
                 self.pending_buffer_len = len(self.buffer)
                 return True
-            return self._expand(completed)
+            return self._schedule_expand(completed)
 
         if self.pending_trigger is not None:
             extra = self.buffer[self.pending_buffer_len:]
@@ -840,6 +911,11 @@ class Daemon:
         return self.wayland_input.start()
 
     def run(self):
+        # Expansion work happens on its own thread so the input backends are
+        # never blocked by the long paste/typing sleeps (see
+        # _start_expansion_worker).
+        self._start_expansion_worker()
+
         if self.wayland:
             print("Wayland session detected: capturing input via evdev and")
             print("typing output via ydotool (pynput is X11-only).")
@@ -848,6 +924,11 @@ class Daemon:
                 print("Texter daemon running (Wayland + evdev mode)")
                 while self.running:
                     time.sleep(1)
+                    # Watchdog: a reader thread can die silently (device
+                    # error, exception in the read loop); respawn it so
+                    # trigger detection keeps working.
+                    if self.wayland_input and not self.wayland_input.healthy():
+                        self.wayland_input.respawn()
             else:
                 print("Falling back to pynput: trigger detection limited to XWayland apps.")
                 self._run_pynput()
@@ -869,6 +950,13 @@ class Daemon:
         except Exception as e:
             print("Failed to register global hotkeys listener:", e)
 
+        # Keep trigger detection alive. pynput terminates its thread silently
+        # for most internal failures (XRecord context disabled by the server,
+        # X connection lost after lock/suspend, event-buffer overruns), and
+        # then join() returns WITHOUT raising - so restart whenever join()
+        # returns while the daemon still wants to run, not just when it
+        # raises. A fresh Listener is required each time: a stopped one can
+        # never be restarted.
         while self.running:
             self.listener = keyboard.Listener(on_press=self.on_press)
             self.listener.daemon = True
@@ -876,13 +964,19 @@ class Daemon:
             try:
                 self.listener.join()
             except Exception:
-                # The listener died unexpectedly; log it and restart so
-                # trigger detection recovers instead of silently stopping.
+                # join() re-raises when a callback crashed (on_press already
+                # guards against that); treat it as a crash too.
                 print("Keyboard listener crashed, restarting:")
                 traceback.print_exc()
-                time.sleep(0.5)
-                continue
-            break
+            else:
+                # join() returned cleanly: either stop() was requested or the
+                # listener died silently. Only the former should end the loop.
+                if self.running:
+                    print("Keyboard listener stopped unexpectedly; restarting "
+                          "so trigger detection keeps working")
+            if not self.running:
+                break
+            time.sleep(0.5)
 
     def _stop_input(self):
         """Stop every active input backend (pynput and/or evdev)."""

@@ -22,6 +22,7 @@ approximations of the common national variants and can be extended.
 
 import glob
 import threading
+import traceback
 
 try:
     import evdev
@@ -300,9 +301,11 @@ class WaylandInputListener:
         self.on_show_hotkey = on_show_hotkey
         self.layout = layout
         self.handler = WaylandKeyHandler(layout=layout)
-        self._threads = []
+        self._threads = []  # (device path, reader thread) pairs
         self._devices = []
         self._dispatch_lock = threading.Lock()
+        self._spawn_lock = threading.Lock()
+        self._stopping = False
 
     def _keyboard_device_paths(self):
         """Paths of keyboard devices, excluding ydotool's uinput device."""
@@ -346,11 +349,46 @@ class WaylandInputListener:
 
         print(f"Wayland input capture active on {len(paths)} device(s) "
               f"(layout: {self.layout})")
+        self._stopping = False
         for path in paths:
-            thread = threading.Thread(target=self._read_loop, args=(path,), daemon=True)
-            thread.start()
-            self._threads.append(thread)
+            self._spawn_reader(path)
         return True
+
+    def _spawn_reader(self, path):
+        """Start a reader thread for `path` unless one is already reading it."""
+        with self._spawn_lock:
+            if self._stopping:
+                return False
+            # Drop entries whose thread already died so respawns don't accumulate.
+            self._threads = [(p, t) for p, t in self._threads if t.is_alive()]
+            if any(p == path for p, _ in self._threads):
+                return False
+            thread = threading.Thread(
+                target=self._read_loop, args=(path,), daemon=True
+            )
+            thread.start()
+            self._threads.append((path, thread))
+            return True
+
+    def healthy(self):
+        """True while at least one device reader thread is alive."""
+        with self._spawn_lock:
+            return any(t.is_alive() for _, t in self._threads)
+
+    def respawn(self):
+        """Restart readers for devices that are no longer being read.
+
+        Called by the daemon's watchdog when healthy() is False (a reader
+        thread died - read error, device unplugged, exception in the loop).
+        Re-scans /dev/input so replugged keyboards are picked up too.
+        """
+        started = 0
+        for path in self._keyboard_device_paths():
+            if self._spawn_reader(path):
+                started += 1
+        if started:
+            print(f"Wayland input: restarted {started} device reader(s)")
+        return started
 
     def _read_loop(self, path):
         try:
@@ -380,6 +418,11 @@ class WaylandInputListener:
                         self.on_key(result)
         except OSError:
             pass  # device unplugged or closed by stop()
+        except Exception:
+            # The reader thread is dead; the daemon's watchdog respawns it, so
+            # log the reason instead of failing silently.
+            print(f"Wayland input: reader for {path} stopped with an error:")
+            traceback.print_exc()
         finally:
             try:
                 device.close()
@@ -388,10 +431,14 @@ class WaylandInputListener:
 
     def stop(self):
         """Stop the reader threads (best-effort; they are daemon threads)."""
+        with self._spawn_lock:
+            self._stopping = True
+            threads = [t for _, t in self._threads]
+            self._threads = []
         for device in self._devices:
             try:
                 device.close()
             except Exception:
                 pass
-        for thread in self._threads:
+        for thread in threads:
             thread.join(timeout=0.5)
