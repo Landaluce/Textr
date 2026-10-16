@@ -94,9 +94,11 @@ jobs:
 
       - name: Zip the macOS .app (directories can't be release attachments)
         run: |
-          cd binaries/textr-macos
-          zip -qr ../Textr-macos.zip Textr.app
-          cd ../..
+          # upload-artifact stores the bundle *contents* without the Textr.app
+          # wrapper, so re-wrap it: macOS only recognizes the bundle with it.
+          mv binaries/textr-macos binaries/Textr.app
+          cd binaries
+          zip -qr Textr-macos.zip Textr.app
 
       - name: Attach to GitHub release
         uses: softprops/action-gh-release@v2
