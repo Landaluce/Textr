@@ -23,6 +23,8 @@ on:
 jobs:
   build:
     strategy:
+      # Keep building the other OSes even if one fails: maximum signal per run.
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -56,7 +58,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Smoke-test imports
+      # pynput needs an X connection at import time on Linux; xvfb-run
+      # (preinstalled on ubuntu-latest) provides one.
+      - name: Smoke-test imports (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -c "import daemon, ui, main; print('imports ok')"
+      - name: Smoke-test imports (Windows/macOS)
+        if: runner.os != 'Linux'
         run: python -c "import daemon, ui, main; print('imports ok')"
 
       - name: Build with PyInstaller
