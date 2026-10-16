@@ -164,7 +164,7 @@ The test suite exercises the daemon without X11: the keyboard controller, clipbo
 ### Architecture
 
 ```text
-main.py ── starts ──> TexterUI (Qt GUI thread)
+main.py ── starts ──> TextrUI (Qt GUI thread)
                   └─> Daemon.run() on a worker thread
                         ├─ pynput Listener (X11)  -> on_press -> buffer + trigger match
                         │    └─ evdev WaylandInputListener (Wayland)
@@ -180,7 +180,7 @@ Threading rules that keep the daemon alive:
 
 ## Troubleshooting
 
-- **Triggers not expanding** — the daemon may be paused: press `Ctrl+Shift+P` once, or check the Daemon button in the Texter window.
+- **Triggers not expanding** — the daemon may be paused: press `Ctrl+Shift+P` once, or check the Daemon button in the Textr window.
 - **Nothing expands on macOS** — the usual cause is the missing Accessibility permission: macOS silently swallows all key events without it. Enable Textr in **System Settings → Privacy & Security → Accessibility**, then restart the app.
 - **Windows SmartScreen blocks the app** — the binary isn't code-signed: click **More info → Run anyway**.
 - **Nothing happens on Wayland** — check the terminal output: Textr prints why capture or output failed. Likely causes: your user isn't in the `input` group (evdev capture), `python-evdev` isn't installed, or the `ydotool` daemon isn't running.
