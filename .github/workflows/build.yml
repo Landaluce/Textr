@@ -44,11 +44,11 @@ jobs:
             artifact_name: textr-windows
             binary_path: dist/Textr.exe
             # --windowed: no console window for a tray app.
-            pyinstaller_args: --onefile --windowed --name Textr --paths . --hidden-import=pynput.keyboard._win32 --hidden-import=pynput.mouse._win32
+            pyinstaller_args: --onefile --windowed --name Textr --paths . --icon=assets/textr.ico --hidden-import=pynput.keyboard._win32 --hidden-import=pynput.mouse._win32
           - os: macos-latest
             artifact_name: textr-macos
             binary_path: dist/Textr.app
-            pyinstaller_args: --onefile --windowed --name Textr --paths . --hidden-import=pynput.keyboard._darwin --hidden-import=pynput.mouse._darwin
+            pyinstaller_args: --onefile --windowed --name Textr --paths . --icon=assets/textr.icns --hidden-import=pynput.keyboard._darwin --hidden-import=pynput.mouse._darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
