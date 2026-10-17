@@ -27,7 +27,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # NOTE: Linux builds on ubuntu-22.04 (glibc 2.35), NOT ubuntu-latest.
+          # Binaries built against older glibc run on newer distros, but not
+          # the reverse: a 24.04 build fails on 22.04 with
+          # "libm.so.6: version ... not found" from the bundled libpython.
+          - os: ubuntu-22.04
             artifact_name: textr-linux
             binary_path: dist/textr
             # --hidden-import: pynput picks its backend via dynamic imports,
