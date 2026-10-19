@@ -1,6 +1,6 @@
 # Textr
 
-Text expansion for Linux (X11 and Wayland). Type a short trigger anywhere and Textr expands it into full text, code templates, or actions — with a PySide6 GUI for managing snippets and settings.
+Text expansion for Linux, Windows, and macOS. Type a short trigger anywhere and Textr expands it into full text, code templates, or actions — with a PySide6 GUI for managing snippets and settings.
 
 ## Features
 
@@ -19,8 +19,8 @@ Text expansion for Linux (X11 and Wayland). Type a short trigger anywhere and Te
 
 ## Requirements
 
-- Linux (X11 or Wayland)
-- Python 3.9+
+- Linux (X11 or Wayland), Windows 10+, or macOS 11+
+- Python 3.9+ (only needed to run from source; the prebuilt binaries bundle everything)
 
 ```txt
 PySide6>=6.6
@@ -29,26 +29,45 @@ pyperclip>=1.9
 evdev>=1.6; sys_platform == 'linux'
 ```
 
-### Wayland notes
-
-- **Input capture** uses `evdev` (raw `/dev/input/event*` reads) so triggers work in native Wayland apps. Your user needs read access to the input devices — either run as root or add your user to the `input` group and log in again. If evdev capture is unavailable, Textr falls back to pynput, which only sees XWayland apps.
-- **Typing output** goes through `ydotool` (the daemon must be running). Install it from [https://github.com/ReimuNotMoe/ydotool](https://github.com/ReimuNotMoe/ydotool).
-- **Keyboard layout** — evdev reports keycodes, not characters, so the captured keys must be mapped through your keyboard layout. Set it to `us`, `uk`, `de`, `fr`, or `es` in Settings (stored as `"layout"` in `config.json`; defaults to `us`). AltGr characters (e.g. `@` on a German layout) are supported. Layout tables are best-effort approximations of the common variants — extend `LAYOUTS` in `input_wayland.py` to add more.
-
 ## Installation
 
-Either install as a package (recommended for regular use):
+**Easiest:** download a ready-to-run binary from the [Releases page](https://github.com/Landaluce/Textr/releases) (v0.2.0 and later) — no Python needed:
+
+| OS | File | Run it |
+|----|------|--------|
+| Linux | `textr` | `chmod +x textr && ./textr` |
+| Windows | `Textr.exe` | Double-click (see Windows notes below) |
+| macOS | `Textr-macos.zip` | Unzip, drag `Textr.app` to Applications (see macOS notes below) |
+
+**Want the easy path?** The [$15 ready-to-run bundle](https://alvaroluce.gumroad.com/l/textr) includes all three binaries plus the snippet starter pack — no GitHub, no setup fiddling.
+
+Or run from source:
 
 ```bash
 python3 -m pip install .        # installs the `textr` command
 ```
 
-Or run from the source tree:
-
 ```bash
 python3 -m pip install -r requirements.txt
-bash run.sh                     # or: python3 main.py
+bash run.sh                     # or: python3 main.py, from the source tree
 ```
+
+### Windows notes
+
+No installation and no special permissions needed — just run `Textr.exe`. On first launch, Windows SmartScreen may warn about an unrecognized app because the binary isn't code-signed: click **More info → Run anyway**.
+
+### macOS notes
+
+Two first-launch steps:
+
+1. **Gatekeeper** — the app isn't notarized, so double-clicking it may report the app as damaged. Instead, right-click `Textr.app` → **Open**, then confirm.
+2. **Accessibility permission** — macOS blocks global key capture without it, and Textr will silently do nothing (no triggers, no errors). Open **System Settings → Privacy & Security → Accessibility** and enable Textr. Grant it on the shipped `Textr.app` — permission is tied to the app bundle, so re-grant if you move or replace it.
+
+### Wayland notes (Linux)
+
+- **Input capture** uses `evdev` (raw `/dev/input/event*` reads) so triggers work in native Wayland apps. Your user needs read access to the input devices — either run as root or add your user to the `input` group and log in again. If evdev capture is unavailable, Textr falls back to pynput, which only sees XWayland apps.
+- **Typing output** goes through `ydotool` (the daemon must be running). Install it from [https://github.com/ReimuNotMoe/ydotool](https://github.com/ReimuNotMoe/ydotool).
+- **Keyboard layout** — evdev reports keycodes, not characters, so the captured keys must be mapped through your keyboard layout. Set it to `us`, `uk`, `de`, `fr`, or `es` in Settings (stored as `"layout"` in `config.json`; defaults to `us`). AltGr characters (e.g. `@` on a German layout) are supported. Layout tables are best-effort approximations of the common variants — extend `LAYOUTS` in `input_wayland.py` to add more.
 
 ## Usage
 
@@ -70,7 +89,7 @@ This starts both the UI window and the background daemon. Close or hide the wind
 | `Del` | manager window | Delete the selected snippet |
 | `Ctrl+Shift+V` | expansion (paste mode) | Insert the expansion text (configurable via **Settings → Paste shortcut**) |
 
-Edit/Delete only fire when the snippet list has focus, so they never trigger while you're typing in the search box. Right-clicking a snippet in the list opens a context menu (Edit / Duplicate / Enable-Disable / Delete); the same actions are available from the buttons, and **Duplicate** clones the selected snippet into a pre-filled Add dialog. The paste shortcut is a combo Textr *sends* to paste — it does not work in Human Typing mode (typed char-by-char) or on Wayland (typed via ydotool).
+Edit/Delete only fire when the snippet list has focus, so they never trigger while you're typing in the search box. Right-clicking a snippet in the list opens a context menu (Edit / Duplicate / Enable-Disable / Delete); the same actions are available from the buttons, and **Duplicate** clones the selected snippet into a pre-filled Add dialog. The paste shortcut is a combo Textr *sends* to paste — it does not work in Human Typing mode (typed char-by-char) or on Wayland (typed via ydotool). On fresh macOS installs the default is `Cmd+V`.
 
 ### Snippet types
 
@@ -118,12 +137,15 @@ Data files are looked up in this order:
 
 1. `$TEXTR_CONFIG_DIR` (used by tests; unset normally)
 2. a file already present next to the working directory (legacy source-tree layout)
-3. `$XDG_CONFIG_HOME/textr/` (defaults to `~/.config/textr/`), created on demand
+3. the per-OS app data directory, created on demand:
+   - Linux: `$XDG_CONFIG_HOME/textr/` (defaults to `~/.config/textr/`)
+   - Windows: `%APPDATA%/Textr/`
+   - macOS: `~/Library/Application Support/Textr/`
 
 - `config.json` — user profile (`name`, `email`, `layout`, `language`, `paste_hotkey`, `date_format`, `time_format`)
 - `snippets.json` — all snippet definitions
 
-The paste shortcut used in clipboard mode defaults to `Ctrl+Shift+V` and is configurable
+The paste shortcut used in clipboard mode defaults to `Ctrl+Shift+V` (`Cmd+V` on fresh macOS installs) and is configurable
 via **Settings → Paste shortcut** (e.g. `ctrl+insert`); if a terminal swallows the paste,
 change it there rather than editing the config by hand.
 
@@ -142,7 +164,7 @@ The test suite exercises the daemon without X11: the keyboard controller, clipbo
 ### Architecture
 
 ```text
-main.py ── starts ──> TexterUI (Qt GUI thread)
+main.py ── starts ──> TextrUI (Qt GUI thread)
                   └─> Daemon.run() on a worker thread
                         ├─ pynput Listener (X11)  -> on_press -> buffer + trigger match
                         │    └─ evdev WaylandInputListener (Wayland)
@@ -158,7 +180,9 @@ Threading rules that keep the daemon alive:
 
 ## Troubleshooting
 
-- **Triggers not expanding** — the daemon may be paused: press `Ctrl+Shift+P` once, or check the Daemon button in the Texter window.
+- **Triggers not expanding** — the daemon may be paused: press `Ctrl+Shift+P` once, or check the Daemon button in the Textr window.
+- **Nothing expands on macOS** — the usual cause is the missing Accessibility permission: macOS silently swallows all key events without it. Enable Textr in **System Settings → Privacy & Security → Accessibility**, then restart the app.
+- **Windows SmartScreen blocks the app** — the binary isn't code-signed: click **More info → Run anyway**.
 - **Nothing happens on Wayland** — check the terminal output: Textr prints why capture or output failed. Likely causes: your user isn't in the `input` group (evdev capture), `python-evdev` isn't installed, or the `ydotool` daemon isn't running.
 - **Paste does nothing in a terminal** — some terminals expect a different paste shortcut than `Ctrl+Shift+V`. Set it via **Settings → Paste shortcut** in the UI.
 - **Input capture broken on Wayland** — run `python3 -m diag` (or `textr-diag` after installing) for a report on session type, device readability, missing packages, and ydotool; add `--listen 5` to press keys and see the keycode → character mapping under your layout.
