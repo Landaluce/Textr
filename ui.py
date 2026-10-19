@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QDialog, QFormLayout,
     QMessageBox, QFileDialog, QGroupBox, QSystemTrayIcon, QMenu,
     QCheckBox, QTreeWidget, QTreeWidgetItem, QAbstractItemView,
-    QStyledItemDelegate, QStyle, QStyleOptionViewItem
+    QStyledItemDelegate, QStyle, QStyleOptionViewItem, QTableWidget, 
+    QTableWidgetItem, QHeaderView
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect
 from PySide6.QtGui import (
@@ -377,18 +378,55 @@ class TexterUI(QMainWindow):
             self.quit_app()
 
     def save_user_config(self):
-        if self.daemon:
-            self.daemon.config["name"] = self.name_edit.text().strip()
-            self.daemon.config["email"] = self.email_edit.text().strip()
-            self.daemon.config["layout"] = self.layout_combo.currentData()
-            hotkey = self.paste_hotkey_edit.text().strip()
-            self.daemon.config["paste_hotkey"] = hotkey or "ctrl+shift+v"
-            date_fmt = self.date_format_edit.text().strip()
-            self.daemon.config["date_format"] = date_fmt or "%Y-%m-%d"
-            time_fmt = self.time_format_edit.text().strip()
-            self.daemon.config["time_format"] = time_fmt or "%H:%M"
+        if not self.daemon:
+            QMessageBox.warning(
+                self,
+                "Settings unavailable",
+                "The daemon is not connected.",
+            )
+            return
+
+        try:
+            custom_settings = self.collect_user_settings()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid setting", str(exc))
+            return
+
+        updates = {
+            "name": self.name_edit.text().strip(),
+            "email": self.email_edit.text().strip(),
+            "layout": self.layout_combo.currentData(),
+            "paste_hotkey": (
+                self.paste_hotkey_edit.text().strip() or "ctrl+shift+v"
+            ),
+            "date_format": (
+                self.date_format_edit.text().strip() or "%Y-%m-%d"
+            ),
+            "time_format": (
+                self.time_format_edit.text().strip() or "%H:%M"
+            ),
+            "user_settings": custom_settings,
+        }
+
+        previous_config = dict(self.daemon.config)
+
+        try:
+            self.daemon.config.update(updates)
             self.daemon.save_config()
-            print("UI: Settings saved")
+        except Exception as exc:
+            # Restore in-memory settings if saving raises an exception.
+            self.daemon.config.clear()
+            self.daemon.config.update(previous_config)
+
+            QMessageBox.critical(
+                self,
+                "Save failed",
+                f"Could not save settings:\n{exc}",
+            )
+            return
+
+        self.on_selection_changed()
+        self.statusBar().showMessage("Settings saved", 3000)
 
     def poll_daemon_status(self):
         if not self.daemon:
@@ -565,8 +603,50 @@ class TexterUI(QMainWindow):
         settings_layout.addRow("Keyboard layout:", self.layout_combo)
         settings_layout.addRow("Paste shortcut:", self.paste_hotkey_edit)
         settings_layout.addRow("Date format:", self.date_format_edit)
+
         settings_layout.addRow("Time format:", self.time_format_edit)
+
+        # Additional user-defined settings.
+        self.user_settings_table = QTableWidget(0, 2)
+        self.user_settings_table.setHorizontalHeaderLabels(["Setting", "Value"])
+        self.user_settings_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.user_settings_table.verticalHeader().setVisible(False)
+        self.user_settings_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.user_settings_table.setMinimumHeight(140)
+
+        settings_layout.addRow("Custom settings:", self.user_settings_table)
+
+        custom_buttons = QHBoxLayout()
+
+        self.add_setting_btn = QPushButton("Add setting")
+        self.add_setting_btn.clicked.connect(self.add_user_setting)
+        custom_buttons.addWidget(self.add_setting_btn)
+
+        self.remove_setting_btn = QPushButton("Remove selected")
+        self.remove_setting_btn.clicked.connect(self.remove_user_settings)
+        custom_buttons.addWidget(self.remove_setting_btn)
+
+        settings_layout.addRow(custom_buttons)
+
+        settings_hint = QLabel(
+            "Double-click a cell to edit it. Custom values are saved as text."
+        )
+        settings_hint.setWordWrap(True)
+        settings_layout.addRow(settings_hint)
+
         settings_layout.addRow(self.save_settings_btn)
+
+        # Restore previously saved custom settings.
+        config = self.daemon.config if self.daemon else {}
+        custom_settings = config.get("user_settings", {})
+
+        if isinstance(custom_settings, dict):
+            for key, value in custom_settings.items():
+                self.add_user_setting_row(str(key), str(value))
         right_layout.addWidget(settings_group)
 
 
@@ -633,6 +713,67 @@ class TexterUI(QMainWindow):
         self.last_enabled_state = self.daemon.enabled if self.daemon else True
 
         self.refresh_snippet_list()
+
+    def add_user_setting_row(self, key="", value=""):
+        row = self.user_settings_table.rowCount()
+        self.user_settings_table.insertRow(row)
+
+        self.user_settings_table.setItem(
+            row, 0, QTableWidgetItem(key)
+        )
+        self.user_settings_table.setItem(
+            row, 1, QTableWidgetItem(value)
+        )
+
+        return row
+
+
+    def add_user_setting(self):
+        row = self.add_user_setting_row()
+        item = self.user_settings_table.item(row, 0)
+
+        self.user_settings_table.setCurrentItem(item)
+        self.user_settings_table.setFocus()
+        self.user_settings_table.editItem(item)
+
+
+    def remove_user_settings(self):
+        rows = {
+            index.row()
+            for index in self.user_settings_table.selectionModel().selectedRows()
+        }
+
+        for row in sorted(rows, reverse=True):
+            self.user_settings_table.removeRow(row)
+
+
+    def collect_user_settings(self):
+        settings = {}
+
+        for row in range(self.user_settings_table.rowCount()):
+            key_item = self.user_settings_table.item(row, 0)
+            value_item = self.user_settings_table.item(row, 1)
+
+            key = key_item.text().strip() if key_item else ""
+            value = value_item.text() if value_item else ""
+
+            # Ignore completely empty rows.
+            if not key and not value:
+                continue
+
+            if not key:
+                raise ValueError(
+                    f"Custom setting in row {row + 1} needs a name."
+                )
+
+            if key in settings:
+                raise ValueError(
+                    f"Duplicate custom setting name: '{key}'."
+                )
+
+            settings[key] = value
+
+        return settings
 
     def get_expansion_preview(self, snippet):
         if not self.daemon:

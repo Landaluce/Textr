@@ -301,7 +301,11 @@ class Daemon:
         self.selected_category = category
 
     def get_context(self):
+        custom_settings = self.config.get("user_settings", {})
+        if not isinstance(custom_settings, dict):
+            custom_settings = {}
         return {
+            **custom_settings,
             "name": self.config.get("name", "Alvaro"),
             "email": self.config.get("email", "alvaro@example.com"),
             "date": datetime.now().strftime(self.config.get("date_format", "%Y-%m-%d")),
