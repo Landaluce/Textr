@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import re
 import pyperclip
@@ -58,6 +58,17 @@ class Daemon:
         self.wayland_input = None
         self.controller = keyboard.Controller()
         self.snippets_file = self._resolve_path(snippets_file)
+        # Prompt-on-expand: set by TexterUI to a callable taking a list of
+        # missing placeholder names and returning a dict (or None = cancel).
+        # When None (no UI, e.g. headless tests), missing placeholders keep
+        # their old behaviour: they render as the literal {name}.
+        self.prompt_handler = None
+        self._prompt_event = None
+        self._prompt_result = None
+        # Backups and trash live next to snippets.json.
+        _data_dir = os.path.dirname(self.snippets_file) or "."
+        self.backup_dir = os.path.join(_data_dir, "backups")
+        self.trash_file = os.path.join(_data_dir, "trash.json")
         self.snippets = {}
         # Guards all access to self.snippets: the UI thread mutates it while
         # the keyboard listener iterates it on every keystroke.
@@ -130,7 +141,131 @@ class Daemon:
         self.config["language"] = language
         self.save_config()
 
+    # ---- Backups -------------------------------------------------------
+    def _backup_file(self, path, kind):
+        """Copy `path` into backups/ as kind-YYYYMMDD-HHMMSS.json.
+
+        Keeps the 10 newest backups per kind, pruning older ones. Returns
+        the backup path, or None when there was nothing to back up.
+        """
+        try:
+            if not os.path.exists(path):
+                return None
+            os.makedirs(self.backup_dir, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            dest = os.path.join(self.backup_dir, f"{kind}-{stamp}.json")
+            n = 1
+            while os.path.exists(dest):
+                n += 1
+                dest = os.path.join(self.backup_dir, f"{kind}-{stamp}-{n}.json")
+            shutil.copyfile(path, dest)
+            # Prune: keep the 10 newest per kind.
+            peers = sorted(
+                f for f in os.listdir(self.backup_dir)
+                if f.startswith(kind + "-") and f.endswith(".json")
+            )
+            for old in peers[:-10]:
+                try:
+                    os.remove(os.path.join(self.backup_dir, old))
+                except OSError:
+                    pass
+            return dest
+        except Exception as e:
+            print(f"Backup failed for {path}: {e}")
+            return None
+
+    def list_backups(self):
+        """Newest-first list of {path, kind, name, mtime} backup dicts."""
+        if not os.path.isdir(self.backup_dir):
+            return []
+        out = []
+        for name in os.listdir(self.backup_dir):
+            if not name.endswith(".json"):
+                continue
+            kind = name.split("-", 1)[0]
+            if kind not in ("snippets", "config"):
+                continue
+            full = os.path.join(self.backup_dir, name)
+            out.append({"path": full, "kind": kind, "name": name,
+                        "mtime": os.path.getmtime(full)})
+        return sorted(out, key=lambda b: b["mtime"], reverse=True)
+
+    def restore_backup(self, path):
+        """Replace snippets (or config) from a backup file.
+
+        The file being replaced is itself backed up first by save_*,
+        so restoring never destroys the current state permanently.
+        Returns True on success.
+        """
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"Restore failed: {e}")
+            return False
+        name = os.path.basename(path)
+        if name.startswith("snippets-"):
+            if not isinstance(data, dict):
+                return False
+            with self.snippets_lock:
+                self.snippets.clear()
+                self.snippets.update(data)
+            self.save_snippets()
+            return True
+        if name.startswith("config-"):
+            if not isinstance(data, dict):
+                return False
+            self.config.update(data)
+            self.save_config()
+            return True
+        return False
+
+    # ---- Trash -----------------------------------------------------------
+    def load_trash(self):
+        if os.path.exists(self.trash_file):
+            try:
+                with open(self.trash_file, "r") as f:
+                    data = json.load(f)
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    def _save_trash(self, trash):
+        try:
+            with open(self.trash_file, "w") as f:
+                json.dump(trash, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save trash: {e}")
+
+    def restore_snippet(self, trigger):
+        """Move a trashed snippet back into the live snippets."""
+        trash = self.load_trash()
+        entry = trash.pop(trigger, None)
+        if entry is None:
+            return False
+        snippet = entry.get("snippet") if isinstance(entry, dict) else None
+        if not isinstance(snippet, dict):
+            return False
+        with self.snippets_lock:
+            self.snippets[trigger] = snippet
+        self._save_trash(trash)
+        self.save_snippets()
+        return True
+
+    def delete_trash_forever(self, trigger):
+        trash = self.load_trash()
+        if trigger in trash:
+            trash.pop(trigger)
+            self._save_trash(trash)
+            return True
+        return False
+
+    def clear_trash(self):
+        self._save_trash({})
+
     def save_config(self):
+        self._backup_file(self.config_file, "config")
         try:
             with open(self.config_file, "w") as f:
                 json.dump(self.config, f, indent=2)
@@ -175,6 +310,7 @@ class Daemon:
 
                 snippets_to_save[trigger] = clean_snippet
 
+            self._backup_file(self.snippets_file, "snippets")
             with open(self.snippets_file, "w") as f:
                 json.dump(snippets_to_save, f, indent=2)
 
@@ -194,8 +330,19 @@ class Daemon:
         self.save_snippets()
 
     def delete_snippet(self, trigger):
+        """Remove a snippet, keeping it in trash.json for later restore.
+
+        Call delete_trash_forever() to remove it permanently.
+        """
         with self.snippets_lock:
-            self.snippets.pop(trigger, None)
+            snippet = self.snippets.pop(trigger, None)
+        if snippet is not None:
+            trash = self.load_trash()
+            trash[trigger] = {
+                "snippet": snippet,
+                "deleted_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            self._save_trash(trash)
         self.save_snippets()
 
     def import_snippets(self, snippets):
@@ -314,7 +461,39 @@ class Daemon:
             "week": datetime.now().strftime("%V"),
         }
 
-    def render_template(self, text):
+    # Placeholders that are always resolved by the daemon itself and must
+    # never be treated as custom settings or prompted for.
+    BUILTIN_PLACEHOLDERS = frozenset(
+        {"name", "email", "date", "time", "iso", "week", "clipboard", "cursor"}
+    )
+
+    def missing_placeholders(self, text):
+        """Placeholder names in `text` with no (non-empty) value.
+
+        Built-ins and {cursor} are excluded. A name already in
+        user_settings with a non-empty value is not missing.
+        """
+        context = self.get_context()
+        missing = []
+        for key in re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)(?:[+-]\d+)?\}", text):
+            if key in self.BUILTIN_PLACEHOLDERS:
+                continue
+            value = context.get(key)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                if key not in missing:
+                    missing.append(key)
+        return missing
+
+    def render_template(self, text, prompt_values=None):
+        """Render placeholders, with relative dates and prompt values.
+
+        Relative dates: {date+7} / {date-3} shift by days (strftime with
+        the configured date format); {iso+7} shifts by days; {time+2}
+        shifts by hours; {week+1} shifts by weeks. Unknown keys, and
+        offset keys that are not date/time/iso/week, render unchanged.
+        prompt_values (from prompt-on-expand) wins over a custom setting
+        for non-built-in keys.
+        """
         context = self.get_context()
         try:
             context["clipboard"] = pyperclip.paste()
@@ -323,9 +502,51 @@ class Daemon:
 
         def replace_var(match):
             key = match.group(1)
+            offset = match.group(2)
+            if offset:
+                try:
+                    delta = int(offset)
+                except ValueError:
+                    return match.group(0)
+                now = datetime.now()
+                if key == "date":
+                    return (now + timedelta(days=delta)).strftime(
+                        self.config.get("date_format", "%Y-%m-%d"))
+                if key == "iso":
+                    return (now + timedelta(days=delta)).isoformat(timespec="seconds")
+                if key == "time":
+                    return (now + timedelta(hours=delta)).strftime(
+                        self.config.get("time_format", "%H:%M"))
+                if key == "week":
+                    return (now + timedelta(weeks=delta)).strftime("%V")
+                return match.group(0)
+            if key not in self.BUILTIN_PLACEHOLDERS and prompt_values and key in prompt_values:
+                return str(prompt_values[key])
             return context.get(key, f"{{{key}}}")
 
-        return re.sub(r"\{(\w+)\}", replace_var, text)
+        return re.sub(
+            r"\{([A-Za-z_][A-Za-z0-9_]*)([+-]\d+)?\}", replace_var, text
+        )
+
+    def render_with_prompt(self, text):
+        """Render `text`, prompting for missing values when a UI is attached.
+
+        Returns the rendered text, or None when the user cancels the
+        prompt (the caller must then abort the expansion, not insert a
+        half-filled snippet). With no prompt_handler, behaves exactly like
+        render_template (missing placeholders stay literal).
+        """
+        missing = self.missing_placeholders(text)
+        if not missing or not self.prompt_handler:
+            return self.render_template(text)
+        try:
+            values = self.prompt_handler(missing)
+        except Exception as e:
+            print(f"Prompt failed: {e}")
+            return self.render_template(text)
+        if values is None:
+            return None
+        return self.render_template(text, prompt_values=values)
 
     def replace(self, trigger, expansion):
         # {cursor} marks where the caret should end up: the text after it is
@@ -649,13 +870,13 @@ class Daemon:
             return None
 
         if item_type == "variable":
-            return self.render_template(item.get("value", ""))
+            return self.render_with_prompt(item.get("value", ""))
 
         if item_type == "template":
             raw = item.get("languages", {}).get(self.current_language)
             if not raw:
                 return None
-            return self.render_template(raw)
+            return self.render_with_prompt(raw)
 
         return None
 
@@ -776,16 +997,27 @@ class Daemon:
         self._expansion_thread.start()
 
     def _expansion_worker(self):
-        """Expansion worker body: pulls triggers off the queue and expands them."""
+        """Expansion worker body: pulls triggers off the queue and expands them.
+
+        Queue items are either a trigger string (normal expansion) or a
+        (None, text) tuple from insert_text() (quick picker: insert text
+        without deleting a trigger first).
+        """
         while self.running:
             try:
-                trigger = self._expansion_queue.get(timeout=0.5)
+                item = self._expansion_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
-            if trigger is None:
+            if item is None:
+                break
+            trigger, insert_text = item if isinstance(item, tuple) else (item, None)
+            if trigger is None and insert_text is None:
                 break
             try:
-                self._expand(trigger)
+                if insert_text is not None:
+                    self.replace("", insert_text)
+                else:
+                    self._expand(trigger)
             except Exception:
                 print("ERROR: exception in expansion worker:")
                 traceback.print_exc()
@@ -889,6 +1121,28 @@ class Daemon:
 
         return True
 
+    def insert_text(self, trigger, text):
+        """Insert `text` into the focused window (quick picker path).
+
+        Unlike replace(), nothing is deleted first: the picker user has
+        not typed a trigger. Records usage for `trigger` when given.
+        Uses the expansion worker when it is running so the UI thread
+        never blocks on the paste/typing sleeps.
+        """
+        if trigger:
+            self._record_usage(trigger)
+        if self._expansion_thread is not None and self._expansion_thread.is_alive():
+            self.is_expanding = True
+            self._expansion_queue.put((None, text))
+        else:
+            self.replace("", text)
+
+    def show_picker_via_hotkey(self):
+        """Global Ctrl+Shift+I: open the quick-insert picker."""
+        print("Global hotkey triggered: showing quick-insert picker")
+        if hasattr(self, "ui") and self.ui:
+            self.ui.daemon_command.emit("picker")
+
     def toggle_pause_via_hotkey(self):
         self.enabled = not self.enabled
         print("Global hotkey triggered: Texter enabled =", self.enabled)
@@ -946,11 +1200,13 @@ class Daemon:
             self.hotkey_listener = keyboard.GlobalHotKeys({
                 '<ctrl>+<shift>+p': self.toggle_pause_via_hotkey,
                 '<ctrl>+<shift>+<space>': self.show_window_via_hotkey,
+                '<ctrl>+<shift>+i': self.show_picker_via_hotkey,
             })
             self.hotkey_listener.daemon = True
             self.hotkey_listener.start()
             print("Global hotkeys registered: Ctrl+Shift+P to toggle pause/resume, "
-                  "Ctrl+Shift+Space to show the manager")
+                  "Ctrl+Shift+Space to show the manager, "
+                  "Ctrl+Shift+I for the quick-insert picker")
         except Exception as e:
             print("Failed to register global hotkeys listener:", e)
 
