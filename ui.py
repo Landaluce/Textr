@@ -35,7 +35,7 @@ def create_status_icon(color_name):
 # Matches QTreeWidget background-color in stylesheet.py. The view paints a
 # full-row highlight below the delegate; this erases it from the indentation
 # gutter (the empty area left of the item text).
-TREE_BACKGROUND = QColor("#313244")
+TREE_BACKGROUND = QColor("#15151c")
 
 
 class SnippetTreeDelegate(QStyledItemDelegate):
@@ -48,9 +48,9 @@ class SnippetTreeDelegate(QStyledItemDelegate):
     the gutter, so selection never covers the empty indent area.
     """
 
-    SELECT_BG = QColor("#b4befe")
+    SELECT_BG = QColor("#ff9a3c")
     SELECT_FG = QColor("#11111b")
-    HOVER_BG = QColor("#45475a")
+    HOVER_BG = QColor("#2e2e38")
     RADIUS = 4
 
     def paint(self, painter, option, index):
@@ -1099,20 +1099,20 @@ class TexterUI(QMainWindow):
         item = QTreeWidgetItem(parent, [name])
         item.setData(0, Qt.UserRole + 1, name)
         item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
-        # Bold lavender headers (Catppuccin Mocha) so groups stand out.
-        item.setForeground(0, QColor("#cba6f7"))
+        # Bold orange headers (Daily Alvaro briefing) so groups stand out.
+        item.setForeground(0, QColor("#ff9a3c"))
         group_font = item.font(0)
         group_font.setBold(True)
         item.setFont(0, group_font)
         return item
 
-    # Light Catppuccin Mocha accents, readable on the dark background.
+    # Briefing orange accents, readable on the dark background.
     TYPE_COLORS = {
-        "command": "#f38ba8",   # red
-        "template": "#89b4fa",  # blue
-        "variable": "#a6e3a1",  # green
+        "command": "#ff9a3c",   # briefing orange
+        "template": "#ff9a3c",  # briefing orange
+        "variable": "#ff9a3c",  # briefing orange
     }
-    DISABLED_COLOR = "#6c7086"  # muted Catppuccin overlay for disabled snippets
+    DISABLED_COLOR = "#9a9aa5"  # briefing muted for disabled snippets
 
     def _add_snippet_item(self, parent, trigger, snippet):
         item = QTreeWidgetItem(parent, [trigger])
@@ -1121,7 +1121,7 @@ class TexterUI(QMainWindow):
         category = snippet.get("category", "uncategorized")
         enabled = snippet.get("enabled", True)
         item.setForeground(
-            0, QColor(self.DISABLED_COLOR if not enabled else self.TYPE_COLORS.get(snippet_type, "#cdd6f4"))
+            0, QColor(self.DISABLED_COLOR if not enabled else self.TYPE_COLORS.get(snippet_type, "#d6d6de"))
         )
         state = " | DISABLED" if not enabled else ""
         item.setToolTip(0, f"{snippet_type.capitalize()} | Category: {category}{state}")
