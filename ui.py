@@ -2,14 +2,16 @@
 import sys
 import json
 import threading
+import re
+from copy import deepcopy
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QTextEdit, QPushButton, QComboBox,
     QListWidget, QListWidgetItem, QDialog, QFormLayout,
     QMessageBox, QFileDialog, QGroupBox, QSystemTrayIcon, QMenu,
     QCheckBox, QTreeWidget, QTreeWidgetItem, QAbstractItemView,
-    QStyledItemDelegate, QStyle, QStyleOptionViewItem, QTableWidget, 
-    QTableWidgetItem, QHeaderView
+    QStyledItemDelegate, QStyle, QStyleOptionViewItem,
+    QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect
 from PySide6.QtGui import (
@@ -377,54 +379,159 @@ class TexterUI(QMainWindow):
         else:
             self.quit_app()
 
+    SETTING_PLACEHOLDER_RE = re.compile(
+        r"(?<![\{$])\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})"
+    )
+    # Match this list to the built-ins actually supported by render_template().
+    BUILTIN_PLACEHOLDERS = frozenset({"name", "email", "date", "time"})
+
+    def add_user_setting_row(self, key="", value=""):
+        row = self.user_settings_table.rowCount()
+        self.user_settings_table.insertRow(row)
+        self.user_settings_table.setItem(row, 0, QTableWidgetItem(key))
+        self.user_settings_table.setItem(row, 1, QTableWidgetItem(value))
+        return row
+
+    def add_user_setting(self):
+        row = self.add_user_setting_row()
+        item = self.user_settings_table.item(row, 0)
+        self.user_settings_table.setCurrentItem(item)
+        self.user_settings_table.setFocus()
+        self.user_settings_table.editItem(item)
+
+    def remove_user_settings(self):
+        rows = {
+            index.row()
+            for index in self.user_settings_table.selectionModel().selectedRows()
+        }
+        for row in sorted(rows, reverse=True):
+            self.user_settings_table.removeRow(row)
+
+    def collect_user_settings(self):
+        settings = {}
+        for row in range(self.user_settings_table.rowCount()):
+            key_item = self.user_settings_table.item(row, 0)
+            value_item = self.user_settings_table.item(row, 1)
+            key = key_item.text().strip() if key_item else ""
+            value = value_item.text() if value_item else ""
+            if not key and not value:
+                continue
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise ValueError(
+                    f"Row {row + 1}: use a setting name such as company or first_name."
+                )
+            if key in self.BUILTIN_PLACEHOLDERS:
+                raise ValueError(f"'{key}' is reserved for a built-in placeholder.")
+            if key in settings:
+                raise ValueError(f"Duplicate custom setting: '{key}'.")
+            settings[key] = value
+        return settings
+
+    def get_snippet_setting_references(self):
+        if not self.daemon:
+            return {}
+        with self.daemon.snippets_lock:
+            snippets = deepcopy(self.daemon.snippets)
+        references = {}
+        for trigger, snippet in snippets.items():
+            if not isinstance(snippet, dict):
+                continue
+            kind = snippet.get("type", "variable")
+            texts = []
+            if kind == "variable":
+                texts.append(snippet.get("value", ""))
+            elif kind == "template":
+                languages = snippet.get("languages", {})
+                if isinstance(languages, dict):
+                    texts.extend(languages.values())
+            for text in texts:
+                if isinstance(text, str):
+                    for key in self.SETTING_PLACEHOLDER_RE.findall(text):
+                        references.setdefault(key, set()).add(str(trigger))
+        return references
+
+    def find_missing_user_settings(self, checked=False, *, notify=True):
+        if not self.daemon:
+            return
+        references = self.get_snippet_setting_references()
+        existing_rows = {}
+        for row in range(self.user_settings_table.rowCount()):
+            item = self.user_settings_table.item(row, 0)
+            key = item.text().strip() if item else ""
+            if key:
+                existing_rows[key] = row
+        added = []
+        unset = []
+        for key in sorted(references):
+            if key in self.BUILTIN_PLACEHOLDERS:
+                continue
+            if key not in existing_rows:
+                existing_rows[key] = self.add_user_setting_row(key, "")
+                added.append(key)
+            row = existing_rows[key]
+            key_item = self.user_settings_table.item(row, 0)
+            value_item = self.user_settings_table.item(row, 1)
+            if value_item is None:
+                value_item = QTableWidgetItem("")
+                self.user_settings_table.setItem(row, 1, value_item)
+            tooltip = "Used by snippets: " + ", ".join(sorted(references[key]))
+            key_item.setToolTip(tooltip)
+            if not value_item.text().strip():
+                unset.append(key)
+                value_item.setToolTip(
+                    "No value set. Enter a value, then click Save Settings.\n"
+                    + tooltip
+                )
+            else:
+                value_item.setToolTip(tooltip)
+        if unset and notify:
+            item = self.user_settings_table.item(existing_rows[unset[0]], 1)
+            self.user_settings_table.setCurrentItem(item)
+            self.user_settings_table.scrollToItem(item)
+        if notify:
+            if unset:
+                message = (
+                    f"Added {len(added)} new setting(s).\n"
+                    f"{len(unset)} referenced setting(s) have no value:\n\n"
+                    + ", ".join(unset)
+                    + "\n\nFill in their values, then click Save Settings."
+                )
+            else:
+                message = "All detected custom placeholders already have values."
+            QMessageBox.information(self, "Snippet settings", message)
+        elif added:
+            self.statusBar().showMessage(
+                f"Found {len(added)} missing custom setting(s). "
+                "Fill them in and click Save Settings.", 8000
+            )
+
     def save_user_config(self):
         if not self.daemon:
-            QMessageBox.warning(
-                self,
-                "Settings unavailable",
-                "The daemon is not connected.",
-            )
+            QMessageBox.warning(self, "Settings unavailable", "The daemon is not connected.")
             return
-
         try:
             custom_settings = self.collect_user_settings()
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid setting", str(exc))
             return
-
         updates = {
             "name": self.name_edit.text().strip(),
             "email": self.email_edit.text().strip(),
             "layout": self.layout_combo.currentData(),
-            "paste_hotkey": (
-                self.paste_hotkey_edit.text().strip() or "ctrl+shift+v"
-            ),
-            "date_format": (
-                self.date_format_edit.text().strip() or "%Y-%m-%d"
-            ),
-            "time_format": (
-                self.time_format_edit.text().strip() or "%H:%M"
-            ),
+            "paste_hotkey": self.paste_hotkey_edit.text().strip() or "ctrl+shift+v",
+            "date_format": self.date_format_edit.text().strip() or "%Y-%m-%d",
+            "time_format": self.time_format_edit.text().strip() or "%H:%M",
             "user_settings": custom_settings,
         }
-
         previous_config = dict(self.daemon.config)
-
         try:
             self.daemon.config.update(updates)
             self.daemon.save_config()
         except Exception as exc:
-            # Restore in-memory settings if saving raises an exception.
             self.daemon.config.clear()
             self.daemon.config.update(previous_config)
-
-            QMessageBox.critical(
-                self,
-                "Save failed",
-                f"Could not save settings:\n{exc}",
-            )
+            QMessageBox.critical(self, "Save failed", f"Could not save settings:\n{exc}")
             return
-
         self.on_selection_changed()
         self.statusBar().showMessage("Settings saved", 3000)
 
@@ -603,10 +710,7 @@ class TexterUI(QMainWindow):
         settings_layout.addRow("Keyboard layout:", self.layout_combo)
         settings_layout.addRow("Paste shortcut:", self.paste_hotkey_edit)
         settings_layout.addRow("Date format:", self.date_format_edit)
-
         settings_layout.addRow("Time format:", self.time_format_edit)
-
-        # Additional user-defined settings.
         self.user_settings_table = QTableWidget(0, 2)
         self.user_settings_table.setHorizontalHeaderLabels(["Setting", "Value"])
         self.user_settings_table.horizontalHeader().setSectionResizeMode(
@@ -617,36 +721,35 @@ class TexterUI(QMainWindow):
             QAbstractItemView.SelectionBehavior.SelectRows
         )
         self.user_settings_table.setMinimumHeight(140)
-
         settings_layout.addRow("Custom settings:", self.user_settings_table)
 
         custom_buttons = QHBoxLayout()
-
         self.add_setting_btn = QPushButton("Add setting")
         self.add_setting_btn.clicked.connect(self.add_user_setting)
-        custom_buttons.addWidget(self.add_setting_btn)
-
         self.remove_setting_btn = QPushButton("Remove selected")
         self.remove_setting_btn.clicked.connect(self.remove_user_settings)
+        custom_buttons.addWidget(self.add_setting_btn)
         custom_buttons.addWidget(self.remove_setting_btn)
-
         settings_layout.addRow(custom_buttons)
 
-        settings_hint = QLabel(
-            "Double-click a cell to edit it. Custom values are saved as text."
+        self.find_missing_settings_btn = QPushButton("Find missing settings")
+        self.find_missing_settings_btn.clicked.connect(self.find_missing_user_settings)
+        settings_layout.addRow(self.find_missing_settings_btn)
+        hint = QLabel(
+            "Double-click cells to edit. Missing {setting_name} placeholders are "
+            "added automatically on startup and after imports. "
+            "Fill in values and click Save Settings."
         )
-        settings_hint.setWordWrap(True)
-        settings_layout.addRow(settings_hint)
+        hint.setWordWrap(True)
+        settings_layout.addRow(hint)
 
-        settings_layout.addRow(self.save_settings_btn)
-
-        # Restore previously saved custom settings.
         config = self.daemon.config if self.daemon else {}
         custom_settings = config.get("user_settings", {})
-
         if isinstance(custom_settings, dict):
             for key, value in custom_settings.items():
                 self.add_user_setting_row(str(key), str(value))
+
+        settings_layout.addRow(self.save_settings_btn)
         right_layout.addWidget(settings_group)
 
 
@@ -713,67 +816,7 @@ class TexterUI(QMainWindow):
         self.last_enabled_state = self.daemon.enabled if self.daemon else True
 
         self.refresh_snippet_list()
-
-    def add_user_setting_row(self, key="", value=""):
-        row = self.user_settings_table.rowCount()
-        self.user_settings_table.insertRow(row)
-
-        self.user_settings_table.setItem(
-            row, 0, QTableWidgetItem(key)
-        )
-        self.user_settings_table.setItem(
-            row, 1, QTableWidgetItem(value)
-        )
-
-        return row
-
-
-    def add_user_setting(self):
-        row = self.add_user_setting_row()
-        item = self.user_settings_table.item(row, 0)
-
-        self.user_settings_table.setCurrentItem(item)
-        self.user_settings_table.setFocus()
-        self.user_settings_table.editItem(item)
-
-
-    def remove_user_settings(self):
-        rows = {
-            index.row()
-            for index in self.user_settings_table.selectionModel().selectedRows()
-        }
-
-        for row in sorted(rows, reverse=True):
-            self.user_settings_table.removeRow(row)
-
-
-    def collect_user_settings(self):
-        settings = {}
-
-        for row in range(self.user_settings_table.rowCount()):
-            key_item = self.user_settings_table.item(row, 0)
-            value_item = self.user_settings_table.item(row, 1)
-
-            key = key_item.text().strip() if key_item else ""
-            value = value_item.text() if value_item else ""
-
-            # Ignore completely empty rows.
-            if not key and not value:
-                continue
-
-            if not key:
-                raise ValueError(
-                    f"Custom setting in row {row + 1} needs a name."
-                )
-
-            if key in settings:
-                raise ValueError(
-                    f"Duplicate custom setting name: '{key}'."
-                )
-
-            settings[key] = value
-
-        return settings
+        self.find_missing_user_settings(notify=False)
 
     def get_expansion_preview(self, snippet):
         if not self.daemon:
@@ -1282,6 +1325,7 @@ class TexterUI(QMainWindow):
                         return
                 self.daemon.import_snippets(snippets)
                 self.refresh_snippet_list()
+                self.find_missing_user_settings(notify=False)
                 print(f"UI: Imported {len(snippets)} snippets (saved)")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to import: {e}")
