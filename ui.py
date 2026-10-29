@@ -1787,7 +1787,9 @@ class TexterUI(QMainWindow):
             library_layout.addWidget(b)
         right_layout.addLayout(library_layout)
 
-        main_layout.addWidget(right_group, 2)
+        # Snippets and Settings panels share the window 50/50
+        # (left_group already has stretch 1, so this matches it).
+        main_layout.addWidget(right_group, 1)
 
         # System Tray Icon Setup
         self.really_quit = False
