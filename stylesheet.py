@@ -60,6 +60,23 @@ dark_stylesheet = """
         border: 1px solid #45475a;
         padding: 5px;
     }
+    /* Snippet table only: briefing theme (the custom settings table above
+       keeps the old colors). The ID selector outranks the generic rule. */
+    QTableWidget#snippet_table {
+        background-color: #15151c;
+        color: #d6d6de;
+        border: 1px solid #2e2e38;
+        border-radius: 6px;
+        gridline-color: #2e2e38;
+        selection-background-color: #ff9a3c;
+        selection-color: #11111b;
+    }
+    QTableWidget#snippet_table QHeaderView::section {
+        background-color: #2e2e38;
+        color: #d6d6de;
+        border: 1px solid #2e2e38;
+        padding: 5px;
+    }
     QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QTreeWidget:focus {
         border: 1px solid #ff9a3c;
     }
