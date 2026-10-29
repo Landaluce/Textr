@@ -17,7 +17,7 @@ Text expansion for Linux, Windows, and macOS. Type a short trigger anywhere and 
 - **Configurable date/time formats** — set the strftime patterns for `{date}`/`{time}` (and `:d`/`:time`/`:datetime`) in the profile settings, e.g. `%d/%m/%Y` for day-first dates
 - **Safe import** — importing a JSON file warns about triggers it will overwrite before applying
 - **Crash resilience** — the keyboard listener survives internal errors and restarts automatically instead of silently dying
-- **Quick-insert picker** — `Ctrl+Shift+I` anywhere (X11; on Wayland use the manager button or tray menu) opens a fuzzy search box; pick a snippet and it inserts into the focused window without typing its trigger
+- **Quick-insert picker** — `Ctrl+Alt+Space` anywhere (X11; on Wayland use the manager button or tray menu) opens a fuzzy search box; pick a snippet and it inserts into the window that was active when the hotkey was pressed, without typing its trigger. On X11 the target window is restored with xdotool when installed (`sudo apt install xdotool`); without it, insertion falls back to a delay after lowering the manager window
 - **Prompt-on-expand** — when a snippet uses a placeholder with no saved value (e.g. `{company}` for a one-off application), Textr asks for it at expansion time instead of inserting a blank, with an option to save it as a custom setting
 - **Automatic backups + trash** — snippets and config are backed up (last 10 each) on every save; deleting a snippet moves it to Trash, where it can be restored or deleted forever
 - **Pack export/import** — export a chosen set of snippets as a `.textr-pack` JSON file; importing a pack never overwrites silently (skip, rename, or overwrite conflicts explicitly)
@@ -91,7 +91,7 @@ This starts both the UI window and the background daemon. Close or hide the wind
 | -------- | ----- | ------ |
 | `Ctrl+Shift+P` | anywhere (global) | Toggle the daemon pause/resume |
 | `Ctrl+Shift+Space` | anywhere (global) | Bring the manager window to the front |
-| `Ctrl+Shift+I` | anywhere (global, X11) | Open the quick-insert picker |
+| `Ctrl+Alt+Space` | anywhere (global, X11) | Open the quick-insert picker |
 | `Ctrl+N` | manager window | Add a snippet |
 | `F2` / `Enter` | manager window | Edit the selected snippet |
 | `Del` | manager window | Delete the selected snippet |
