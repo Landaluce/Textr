@@ -398,9 +398,11 @@ class QuickInsertDialog(QDialog):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Type to search snippets...")
         self.search.textChanged.connect(self._refresh_list)
+        self.search.returnPressed.connect(self._on_accept)
         layout.addWidget(self.search)
         self.list_widget = QListWidget()
         self.list_widget.itemDoubleClicked.connect(lambda _i: self._on_accept())
+        self.list_widget.itemActivated.connect(lambda _i: self._on_accept())
         layout.addWidget(self.list_widget)
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
@@ -453,9 +455,19 @@ class QuickInsertDialog(QDialog):
             self.list_widget.addItem(item)
         if self.list_widget.count():
             self.list_widget.setCurrentRow(0)
+            self.list_widget.item(0).setSelected(True)
 
     def _on_accept(self):
         item = self.list_widget.currentItem()
+        if item is None:
+            selected = self.list_widget.selectedItems()
+            item = selected[0] if selected else None
+        if item is None and self.list_widget.count():
+            # OK pressed with no selection (e.g. selection cleared by
+            # clicking empty list space): insert the top result instead
+            # of silently doing nothing. Double-click never hits this
+            # because it always carries its own item.
+            item = self.list_widget.item(0)
         if item is None:
             return
         trigger = item.data(Qt.UserRole)
@@ -495,9 +507,7 @@ class QuickInsertDialog(QDialog):
         if self.target_window and self.daemon:
             restored = self.daemon._restore_active_window(self.target_window)
         delay = 500 if restored else 400
-        QTimer.singleShot(
-            delay, lambda: self.ui._insert_picker_selection(trigger, final)
-        )
+        self.ui._schedule_picker_insert(trigger, final, delay)
         self.accept()
 
 
@@ -1199,6 +1209,24 @@ class TexterUI(QMainWindow):
     def _insert_picker_selection(self, trigger, text):
         if self.daemon:
             self.daemon.insert_text(trigger, text)
+
+    def _schedule_picker_insert(self, trigger, text, delay_ms):
+        """Schedule a picker insert on a manager-owned timer.
+
+        The picker dialog is created as a temporary in show_picker(),
+        so a timer created by the dialog itself may be discarded with
+        it once exec() returns. A timer owned by the manager (which
+        lives for the whole app session) cannot be lost that way.
+        """
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(
+            lambda: self._insert_picker_selection(trigger, text)
+        )
+        # Keep a Python reference until it fires; otherwise the timer
+        # object itself could be collected before firing.
+        self._picker_insert_timer = timer
+        timer.start(delay_ms)
 
     # ---- Backups / trash / cleanup ---------------------------------------
     def show_backups(self):
