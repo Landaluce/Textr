@@ -298,6 +298,23 @@ class AddSnippetDialog(QDialog):
         return snippet
 
 
+class UsedByTableWidgetItem(QTableWidgetItem):
+        """Used by cell that sorts by (snippet count, use count), not text.
+        
+            The displayed text is e.g. "3 snippets, 4 uses: ..." or "0 snippets",
+                which would sort wrong as plain text ("10 ..." before "2 ...").
+                    refresh_user_setting_usage() stores the numeric pair in UserRole;
+                        this __lt__ compares that pair, falling back to text.
+                            """
+    
+    def __lt__(self, other):
+                self_key = self.data(Qt.ItemDataRole.UserRole)
+                other_key = other.data(Qt.ItemDataRole.UserRole)
+                if isinstance(self_key, tuple) and isinstance(other_key, tuple):
+                                return self_key < other_key
+                            return super().__lt__(other)
+
+
 class TexterUI(QMainWindow):
     quit_requested = Signal()
     # Emitted by the daemon's keyboard listener thread; Qt delivers it
@@ -394,8 +411,9 @@ class TexterUI(QMainWindow):
         self.user_settings_table.insertRow(row)
         self.user_settings_table.setItem(row, 0, QTableWidgetItem(key))
         self.user_settings_table.setItem(row, 1, QTableWidgetItem(value))
-        used_by_item = QTableWidgetItem("")
-        used_by_item.setFlags(
+        used_by_item = UsedByTableWidgetItem("")
+        used_by_item.setData(Qt.ItemDataRole.UserRole, (0, 0))
+used_by_item.setFlags(
             Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
         )
         self.user_settings_table.setItem(row, 2, used_by_item)
@@ -470,7 +488,9 @@ class TexterUI(QMainWindow):
                 """
         if not hasattr(self, "user_settings_table"):
             return
-        triggers_by_key = {}
+        was_sorting = self.user_settings_table.isSortingEnabled()
+        self.user_settings_table.setSortingEnabled(False)
+triggers_by_key = {}
         uses_by_key = {}
         if self.daemon:
             with self.daemon.snippets_lock:
@@ -509,18 +529,24 @@ class TexterUI(QMainWindow):
                 tooltip = "Not used by any snippet"
             used_by_item = self.user_settings_table.item(row, 2)
             if used_by_item is None:
-                used_by_item = QTableWidgetItem("")
+                used_by_item = UsedByTableWidgetItem("")
                 used_by_item.setFlags(
                     Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
                 )
                 self.user_settings_table.setItem(row, 2, used_by_item)
-            used_by_item.setText(text)
+            used_by_item.setData(
+                                Qt.ItemDataRole.UserRole,
+                                (len(triggers), uses_by_key.get(key, 0)),
+            )
+used_by_item.setText(text)
             used_by_item.setToolTip(tooltip)
+        self.user_settings_table.setSortingEnabled(was_sorting)
 
     def find_missing_user_settings(self, checked=False, *, notify=True):
         if not self.daemon:
             return
-        references = self.get_snippet_setting_references()
+        self.user_settings_table.setSortingEnabled(False)
+references = self.get_snippet_setting_references()
         existing_rows = {}
         for row in range(self.user_settings_table.rowCount()):
             item = self.user_settings_table.item(row, 0)
@@ -572,6 +598,7 @@ class TexterUI(QMainWindow):
                 "Fill them in and click Save Settings.", 8000
             )
         self.refresh_user_setting_usage()
+        self.user_settings_table.setSortingEnabled(True)
 
     def save_user_config(self):
         if not self.daemon:
@@ -792,7 +819,8 @@ class TexterUI(QMainWindow):
         self.user_settings_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
-        self.user_settings_table.setMinimumHeight(140)
+                self.user_settings_table.setSortingEnabled(True)
+self.user_settings_table.setMinimumHeight(140)
         settings_layout.addRow("Custom settings:", self.user_settings_table)
 
         custom_buttons = QHBoxLayout()
