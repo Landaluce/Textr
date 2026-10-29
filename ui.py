@@ -1106,11 +1106,11 @@ class TexterUI(QMainWindow):
         item.setFont(0, group_font)
         return item
 
-    # Briefing orange accents, readable on the dark background.
+    # Light Catppuccin Mocha accents, readable on the dark background.
     TYPE_COLORS = {
-        "command": "#ff9a3c",   # briefing orange
-        "template": "#ff9a3c",  # briefing orange
-        "variable": "#ff9a3c",  # briefing orange
+        "command": "#f38ba8",   # red
+        "template": "#89b4fa",  # blue
+        "variable": "#a6e3a1",  # green
     }
     DISABLED_COLOR = "#9a9aa5"  # briefing muted for disabled snippets
 
