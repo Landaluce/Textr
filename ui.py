@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (
     QMessageBox, QFileDialog, QGroupBox, QSystemTrayIcon, QMenu,
     QCheckBox, QTreeWidget, QTreeWidgetItem, QAbstractItemView,
     QStyledItemDelegate, QStyle, QStyleOptionViewItem,
-    QTableWidget, QTableWidgetItem, QHeaderView
+    QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox,
+    QRadioButton
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect
 from PySide6.QtGui import (
@@ -315,8 +316,491 @@ class UsedByTableWidgetItem(QTableWidgetItem):
         return super().__lt__(other)
 
 
+
+class PromptValuesDialog(QDialog):
+    """Ask for per-use placeholder values at expansion time.
+
+    Standalone (no parent, stays on top) so that when it closes, focus
+    returns to the application the user was typing in, not to the
+    manager window. Returns None on cancel.
+    """
+
+    def __init__(self, keys):
+        super().__init__(None)
+        self.setWindowTitle("Fill in snippet values")
+        self.setWindowFlags(
+            self.windowFlags() | Qt.WindowStaysOnTopHint
+        )
+        self._edits = {}
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        for key in keys:
+            edit = QLineEdit()
+            edit.setPlaceholderText(f"Value for {{{key}}}")
+            self._edits[key] = edit
+            form.addRow(f"{key}:", edit)
+        layout.addLayout(form)
+        self._save_check = QCheckBox("Save these values as custom settings")
+        self._save_check.setChecked(True)
+        layout.addWidget(self._save_check)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        if self._edits:
+            list(self._edits.values())[0].setFocus()
+
+    def values(self):
+        return {k: e.text() for k, e in self._edits.items()}
+
+    def save_checked(self):
+        return self._save_check.isChecked()
+
+
+def _fuzzy_score(trigger, expansion, query):
+    """Score for the quick picker: substring beats subsequence beats none."""
+    if not query:
+        return 1
+    t = trigger.lower()
+    e = (expansion or "").lower()
+    if query in t:
+        return 100 - (len(t) - len(query))
+    if query in e:
+        return 60
+    # Subsequence match in the trigger (e.g. "sig" in "signature").
+    it = iter(t)
+    if all(ch in it for ch in query):
+        return 40
+    return 0
+
+
+class QuickInsertDialog(QDialog):
+    """Fuzzy snippet picker, opened anywhere via Ctrl+Shift+I.
+
+    Standalone and stays-on-top so closing it returns focus to the
+    application the user was in. Only variable/template snippets are
+    listed (commands act on the manager, they do not insert text).
+    """
+
+    def __init__(self, daemon, ui):
+        super().__init__(None)
+        self.daemon = daemon
+        self.ui = ui
+        self.setWindowTitle("Quick Insert")
+        self.setWindowFlags(
+            self.windowFlags() | Qt.WindowStaysOnTopHint
+        )
+        self.resize(520, 380)
+        layout = QVBoxLayout(self)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Type to search snippets...")
+        self.search.textChanged.connect(self._refresh_list)
+        layout.addWidget(self.search)
+        self.list_widget = QListWidget()
+        self.list_widget.itemDoubleClicked.connect(lambda _i: self._on_accept())
+        layout.addWidget(self.list_widget)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._refresh_list()
+        self.search.setFocus()
+
+    def _candidates(self):
+        if not self.daemon:
+            return []
+        with self.daemon.snippets_lock:
+            items = list(self.daemon.snippets.items())
+        out = []
+        for trigger, snippet in items:
+            if not isinstance(snippet, dict):
+                continue
+            if snippet.get("type") not in ("variable", "template"):
+                continue
+            if not self.daemon._enabled(snippet):
+                continue
+            if snippet.get("type") == "variable":
+                raw = snippet.get("value", "")
+            else:
+                raw = (snippet.get("languages", {}) or {}).get(
+                    self.daemon.current_language, ""
+                ) or ""
+            out.append((trigger, snippet, raw))
+        return out
+
+    def _refresh_list(self):
+        query = self.search.text().strip().lower()
+        scored = []
+        for trigger, snippet, raw in self._candidates():
+            score = _fuzzy_score(trigger, raw, query)
+            if query and score == 0:
+                continue
+            usage = int(snippet.get("usage", 0) or 0)
+            scored.append((-score, -usage, trigger, snippet, raw))
+        scored.sort(key=lambda r: (r[0], r[1], r[2]))
+        self.list_widget.clear()
+        for _neg_score, _neg_usage, trigger, snippet, raw in scored:
+            preview = " ".join(str(raw).split())[:80]
+            item = QListWidgetItem(
+                f"{trigger}  [{snippet.get('type', '')}]  {preview}"
+            )
+            item.setData(Qt.UserRole, trigger)
+            self.list_widget.addItem(item)
+        if self.list_widget.count():
+            self.list_widget.setCurrentRow(0)
+
+    def _on_accept(self):
+        item = self.list_widget.currentItem()
+        if item is None:
+            return
+        trigger = item.data(Qt.UserRole)
+        if not self.daemon:
+            self.reject()
+            return
+        with self.daemon.snippets_lock:
+            snippet = self.daemon.snippets.get(trigger)
+        if not isinstance(snippet, dict):
+            self.reject()
+            return
+        if snippet.get("type") == "variable":
+            raw = snippet.get("value", "")
+        else:
+            raw = (snippet.get("languages", {}) or {}).get(
+                self.daemon.current_language, ""
+            ) or ""
+        # Prompt path (GUI thread): do NOT use render_with_prompt here,
+        # which would wait on the GUI thread for its own queued dialog.
+        missing = self.daemon.missing_placeholders(raw)
+        values = {}
+        if missing:
+            values = self.ui.prompt_for_values_sync(missing)
+            if values is None:
+                self.reject()
+                return
+        final = self.daemon.render_template(raw, prompt_values=values)
+        self.hide()
+        # Let focus return to the application the user was in before
+        # inserting; the daemon worker then pastes/types there.
+        QTimer.singleShot(
+            250, lambda: self.ui._insert_picker_selection(trigger, final)
+        )
+        self.accept()
+
+
+class BackupsDialog(QDialog):
+    """List config/snippets backups and restore one."""
+
+    def __init__(self, ui):
+        super().__init__(ui)
+        self.ui = ui
+        self.setWindowTitle("Backups")
+        self.resize(520, 360)
+        layout = QVBoxLayout(self)
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget)
+        self._refresh()
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        restore_btn = QPushButton("Restore selected")
+        restore_btn.clicked.connect(self._restore)
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(restore_btn)
+        btn_row.addWidget(buttons)
+        layout.addLayout(btn_row)
+
+    def _refresh(self):
+        self.list_widget.clear()
+        if not self.ui.daemon:
+            return
+        for b in self.ui.daemon.list_backups():
+            item = QListWidgetItem(f"{b['kind']}: {b['name']}")
+            item.setData(Qt.UserRole, b["path"])
+            self.list_widget.addItem(item)
+
+    def _restore(self):
+        item = self.list_widget.currentItem()
+        if item is None or not self.ui.daemon:
+            return
+        path = item.data(Qt.UserRole)
+        reply = QMessageBox.question(
+            self, "Restore backup",
+            "Restore this backup? The current file is backed up first, "
+            "so you can undo this restore from Backups.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        if self.ui.daemon.restore_backup(path):
+            self.ui.refresh_snippet_list()
+            self.ui.statusBar().showMessage("Backup restored", 3000)
+            self._refresh()
+        else:
+            QMessageBox.warning(self, "Restore failed", "Could not restore that backup.")
+
+
+class TrashDialog(QDialog):
+    """Deleted snippets: restore, delete forever, or empty the trash."""
+
+    def __init__(self, ui):
+        super().__init__(ui)
+        self.ui = ui
+        self.setWindowTitle("Trash")
+        self.resize(520, 360)
+        layout = QVBoxLayout(self)
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget)
+        self._refresh()
+        restore_btn = QPushButton("Restore selected")
+        restore_btn.clicked.connect(self._restore)
+        delete_btn = QPushButton("Delete forever")
+        delete_btn.clicked.connect(self._delete_forever)
+        empty_btn = QPushButton("Empty trash")
+        empty_btn.clicked.connect(self._empty)
+        close_btn = QDialogButtonBox(QDialogButtonBox.Close)
+        close_btn.rejected.connect(self.reject)
+        btn_row = QHBoxLayout()
+        for b in (restore_btn, delete_btn, empty_btn, close_btn):
+            btn_row.addWidget(b)
+        layout.addLayout(btn_row)
+
+    def _refresh(self):
+        self.list_widget.clear()
+        if not self.ui.daemon:
+            return
+        for trigger, entry in sorted(self.ui.daemon.load_trash().items()):
+            deleted = entry.get("deleted_at", "") if isinstance(entry, dict) else ""
+            item = QListWidgetItem(f"{trigger}  (deleted {deleted})")
+            item.setData(Qt.UserRole, trigger)
+            self.list_widget.addItem(item)
+
+    def _restore(self):
+        item = self.list_widget.currentItem()
+        if item is None or not self.ui.daemon:
+            return
+        if self.ui.daemon.restore_snippet(item.data(Qt.UserRole)):
+            self.ui.refresh_snippet_list()
+            self._refresh()
+
+    def _delete_forever(self):
+        item = self.list_widget.currentItem()
+        if item is None or not self.ui.daemon:
+            return
+        reply = QMessageBox.question(
+            self, "Delete forever",
+            f"Permanently delete '{item.data(Qt.UserRole)}'? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.ui.daemon.delete_trash_forever(item.data(Qt.UserRole))
+            self._refresh()
+
+    def _empty(self):
+        if not self.ui.daemon:
+            return
+        reply = QMessageBox.question(
+            self, "Empty trash",
+            "Permanently delete everything in the trash? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.ui.daemon.clear_trash()
+            self._refresh()
+
+
+class PackExportDialog(QDialog):
+    """Choose which snippets go into an exported pack file."""
+
+    def __init__(self, ui):
+        super().__init__(ui)
+        self.ui = ui
+        self.setWindowTitle("Export Pack")
+        self.resize(520, 400)
+        layout = QVBoxLayout(self)
+        self.list_widget = QListWidget()
+        if ui.daemon:
+            with ui.daemon.snippets_lock:
+                triggers = sorted(ui.daemon.snippets)
+            for trigger in triggers:
+                item = QListWidgetItem(trigger)
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked)
+                self.list_widget.addItem(item)
+        layout.addWidget(self.list_widget)
+        all_btn = QPushButton("Select all")
+        all_btn.clicked.connect(lambda: self._set_all(Qt.Checked))
+        none_btn = QPushButton("Select none")
+        none_btn.clicked.connect(lambda: self._set_all(Qt.Unchecked))
+        row = QHBoxLayout()
+        row.addWidget(all_btn)
+        row.addWidget(none_btn)
+        layout.addLayout(row)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _set_all(self, state):
+        for i in range(self.list_widget.count()):
+            self.list_widget.item(i).setCheckState(state)
+
+    def selected_triggers(self):
+        return [
+            self.list_widget.item(i).text()
+            for i in range(self.list_widget.count())
+            if self.list_widget.item(i).checkState() == Qt.Checked
+        ]
+
+
+class PackConflictDialog(QDialog):
+    """How to handle pack triggers that already exist with different content."""
+
+    def __init__(self, conflicts):
+        super().__init__()
+        self.setWindowTitle("Pack import conflicts")
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            f"{len(conflicts)} pack snippet(s) already exist with different "
+            "content:\n" + ", ".join(conflicts[:15])
+            + (" ..." if len(conflicts) > 15 else "")
+        ))
+        self.skip_radio = QRadioButton("Skip conflicts (keep existing)")
+        self.skip_radio.setChecked(True)
+        self.rename_radio = QRadioButton("Rename imported ones (append -2, -3...)")
+        self.overwrite_radio = QRadioButton("Overwrite existing snippets")
+        for r in (self.skip_radio, self.rename_radio, self.overwrite_radio):
+            layout.addWidget(r)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def choice(self):
+        if self.rename_radio.isChecked():
+            return "rename"
+        if self.overwrite_radio.isChecked():
+            return "overwrite"
+        return "skip"
+
+
+def _normalized_expansion(snippet):
+    """Comparable expansion text for duplicate detection."""
+    kind = snippet.get("type", "variable")
+    if kind == "variable":
+        text = snippet.get("value", "")
+    elif kind == "template":
+        languages = snippet.get("languages", {})
+        text = " | ".join(
+            f"{lang}:{value}"
+            for lang, value in sorted(languages.items())
+            if isinstance(value, str)
+        ) if isinstance(languages, dict) else ""
+    elif kind == "command":
+        text = str(snippet.get("action", ""))
+    else:
+        text = ""
+    return " ".join(str(text).split())
+
+
+class CleanupDialog(QDialog):
+    """Flag never-expanded and duplicate snippets for delete/disable."""
+
+    def __init__(self, ui):
+        super().__init__(ui)
+        self.ui = ui
+        self.setWindowTitle("Snippet cleanup")
+        self.resize(560, 400)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            "Never expanded = no recorded usage (snippets imported before "
+            "usage tracking, or never used, show here too). "
+            "Duplicates = two triggers expanding to identical text."
+        ))
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget)
+        self._refresh()
+        delete_btn = QPushButton("Delete selected (to Trash)")
+        delete_btn.clicked.connect(self._delete_selected)
+        disable_btn = QPushButton("Disable selected")
+        disable_btn.clicked.connect(self._disable_selected)
+        close_btn = QDialogButtonBox(QDialogButtonBox.Close)
+        close_btn.rejected.connect(self.reject)
+        row = QHBoxLayout()
+        for b in (delete_btn, disable_btn, close_btn):
+            row.addWidget(b)
+        layout.addLayout(row)
+
+    def _findings(self):
+        if not self.ui.daemon:
+            return {}
+        with self.ui.daemon.snippets_lock:
+            items = list(self.ui.daemon.snippets.items())
+        reasons = {}
+        for trigger, snippet in items:
+            if isinstance(snippet, dict) and not int(snippet.get("usage", 0) or 0):
+                reasons.setdefault(trigger, []).append("never expanded")
+        by_text = {}
+        for trigger, snippet in items:
+            if not isinstance(snippet, dict):
+                continue
+            key = (snippet.get("type", "variable"), _normalized_expansion(snippet))
+            if key[1]:
+                by_text.setdefault(key, []).append(trigger)
+        for triggers in by_text.values():
+            if len(triggers) > 1:
+                for trigger in triggers:
+                    reasons.setdefault(trigger, []).append(
+                        "duplicate of " + ", ".join(t for t in triggers if t != trigger)
+                    )
+        return reasons
+
+    def _refresh(self):
+        self.list_widget.clear()
+        for trigger, reasons in sorted(self._findings().items()):
+            item = QListWidgetItem(f"{trigger}  ({'; '.join(reasons)})")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            item.setData(Qt.UserRole, trigger)
+            self.list_widget.addItem(item)
+
+    def _checked(self):
+        return [
+            self.list_widget.item(i).data(Qt.UserRole)
+            for i in range(self.list_widget.count())
+            if self.list_widget.item(i).checkState() == Qt.Checked
+        ]
+
+    def _delete_selected(self):
+        if not self.ui.daemon:
+            return
+        for trigger in self._checked():
+            self.ui.daemon.delete_snippet(trigger)
+        self.ui.refresh_snippet_list()
+        self._refresh()
+
+    def _disable_selected(self):
+        if not self.ui.daemon:
+            return
+        for trigger in self._checked():
+            with self.ui.daemon.snippets_lock:
+                snippet = self.ui.daemon.snippets.get(trigger)
+                if isinstance(snippet, dict):
+                    snippet["enabled"] = False
+        self.ui.daemon.save_snippets()
+        self.ui.refresh_snippet_list()
+        self._refresh()
+
+
 class TexterUI(QMainWindow):
     quit_requested = Signal()
+    prompt_requested = Signal(object)
     # Emitted by the daemon's keyboard listener thread; Qt delivers it
     # to handle_daemon_command on the GUI thread via a queued connection.
     daemon_command = Signal(str)
@@ -330,6 +814,10 @@ class TexterUI(QMainWindow):
         self._focus_app = None
         self.quit_requested.connect(self.quit_app)
         self.daemon_command.connect(self.handle_daemon_command, Qt.QueuedConnection)
+        self.prompt_requested.connect(self._handle_prompt_request, Qt.QueuedConnection)
+        if daemon:
+            # Expansion worker thread -> GUI thread prompt (see below).
+            daemon.prompt_handler = self._prompt_from_daemon_thread
         self.setup_ui()
         self._track_app_focus(QApplication.instance())
 
@@ -364,6 +852,8 @@ class TexterUI(QMainWindow):
         touching widgets directly (Qt widgets are not thread-safe)."""
         if action in ("ui", "top"):
             self.bring_to_front()
+        elif action == "picker":
+            self.show_picker()
         elif action == "hide":
             self.hide_window()
         elif action == "refresh":
@@ -599,6 +1089,202 @@ class TexterUI(QMainWindow):
             )
         self.refresh_user_setting_usage()
         self.user_settings_table.setSortingEnabled(True)
+
+    # ---- Prompt-on-expand ---------------------------------------------
+    def _prompt_from_daemon_thread(self, missing):
+        """Prompt handler called from the daemon expansion worker.
+
+        Shows the dialog on the GUI thread via a queued signal and waits
+        for it. Returns the values dict, or None on cancel/timeout.
+        """
+        self._prompt_event = threading.Event()
+        self._prompt_result = None
+        self.prompt_requested.emit(list(missing))
+        if not self._prompt_event.wait(timeout=120):
+            return None
+        return self._prompt_result
+
+    def _handle_prompt_request(self, missing):
+        dialog = PromptValuesDialog(missing)
+        if dialog.exec() == QDialog.Accepted:
+            values = dialog.values()
+            if dialog.save_checked():
+                self.sync_prompted_settings(values)
+            self._prompt_result = values
+        else:
+            self._prompt_result = None
+        if getattr(self, "_prompt_event", None) is not None:
+            self._prompt_event.set()
+
+    def prompt_for_values_sync(self, missing):
+        """Prompt on the GUI thread (quick picker path). None = cancelled."""
+        dialog = PromptValuesDialog(missing)
+        if dialog.exec() != QDialog.Accepted:
+            return None
+        values = dialog.values()
+        if dialog.save_checked():
+            self.sync_prompted_settings(values)
+        return values
+
+    def sync_prompted_settings(self, values):
+        """Merge prompted values into user_settings and the settings table."""
+        if not self.daemon:
+            return
+        settings = self.daemon.config.get("user_settings", {})
+        if not isinstance(settings, dict):
+            settings = {}
+        changed = False
+        for key, value in values.items():
+            if value and str(value).strip():
+                settings[key] = value
+                changed = True
+        if not changed:
+            return
+        self.daemon.config["user_settings"] = settings
+        self.daemon.save_config()
+        if hasattr(self, "user_settings_table"):
+            existing = {}
+            for row in range(self.user_settings_table.rowCount()):
+                item = self.user_settings_table.item(row, 0)
+                if item:
+                    existing[item.text().strip()] = row
+            for key, value in values.items():
+                if not value or not str(value).strip():
+                    continue
+                if key in existing:
+                    self.user_settings_table.setItem(
+                        existing[key], 1, QTableWidgetItem(value)
+                    )
+                else:
+                    self.add_user_setting_row(key, value)
+            self.refresh_user_setting_usage()
+
+    # ---- Quick picker ----------------------------------------------------
+    def show_picker(self):
+        if not self.daemon:
+            return
+        QuickInsertDialog(self.daemon, self).exec()
+
+    def _insert_picker_selection(self, trigger, text):
+        if self.daemon:
+            self.daemon.insert_text(trigger, text)
+
+    # ---- Backups / trash / cleanup ---------------------------------------
+    def show_backups(self):
+        BackupsDialog(self).exec()
+
+    def show_trash(self):
+        TrashDialog(self).exec()
+        self.refresh_snippet_list()
+
+    def show_cleanup(self):
+        CleanupDialog(self).exec()
+        self.refresh_snippet_list()
+
+    # ---- Pack export / import --------------------------------------------
+    def export_pack(self):
+        if not self.daemon:
+            return
+        dialog = PackExportDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        triggers = dialog.selected_triggers()
+        if not triggers:
+            QMessageBox.information(self, "Export Pack", "No snippets selected.")
+            return
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Pack", "", "JSON Files (*.json)"
+        )
+        if not file_path:
+            return
+        try:
+            with self.daemon.snippets_lock:
+                snippets = {
+                    t: {k: v for k, v in self.daemon.snippets[t].items()
+                        if k not in ("usage", "last_used")}
+                    for t in triggers if t in self.daemon.snippets
+                }
+            pack = {"format": "textr-pack", "version": 1, "snippets": snippets}
+            with open(file_path, "w") as f:
+                json.dump(pack, f, indent=2)
+            self.statusBar().showMessage(
+                f"Exported pack with {len(snippets)} snippet(s)", 3000
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to export pack: {e}")
+
+    def import_pack(self):
+        if not self.daemon:
+            return
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import Pack", "", "JSON Files (*.json)"
+        )
+        if not file_path:
+            return
+        try:
+            with open(file_path, "r") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict) and isinstance(raw.get("snippets"), dict):
+                snippets = raw["snippets"]
+            elif isinstance(raw, dict):
+                snippets = raw
+            else:
+                raise ValueError("file is neither a pack nor a snippet dict")
+            if not snippets:
+                QMessageBox.information(self, "Import Pack", "No snippets found in the file.")
+                return
+            with self.daemon.snippets_lock:
+                existing = dict(self.daemon.snippets)
+
+            def _clean(snippet):
+                if not isinstance(snippet, dict):
+                    return snippet
+                return {k: v for k, v in snippet.items()
+                        if k not in ("usage", "last_used")}
+
+            conflicts = sorted(
+                t for t in snippets
+                if t in existing and _clean(existing[t]) != _clean(snippets[t])
+            )
+            to_import = dict(snippets)
+            if conflicts:
+                dialog = PackConflictDialog(conflicts)
+                if dialog.exec() != QDialog.Accepted:
+                    return
+                choice = dialog.choice()
+                if choice == "skip":
+                    for t in conflicts:
+                        to_import.pop(t, None)
+                elif choice == "rename":
+                    renamed = {}
+                    for t in snippets:
+                        new_t = t
+                        if t in conflicts:
+                            n = 2
+                            while new_t in existing or new_t in renamed:
+                                new_t = f"{t}-{n}"
+                                n += 1
+                        renamed[new_t] = snippets[t]
+                    to_import = renamed
+                # overwrite: to_import stays as-is
+            if not to_import:
+                QMessageBox.information(
+                    self, "Import Pack", "Nothing to import (all conflicts skipped)."
+                )
+                return
+            to_import = {
+                t: ({k: v for k, v in sn.items() if k not in ("usage", "last_used")}
+                    if isinstance(sn, dict) else sn)
+                for t, sn in to_import.items()
+            }
+            self.daemon.import_snippets(to_import)
+            self.refresh_snippet_list()
+            self.find_missing_user_settings(notify=False)
+            self.statusBar().showMessage(
+                f"Imported pack: {len(to_import)} snippet(s)", 3000
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to import pack: {e}")
 
     def save_user_config(self):
         if not self.daemon:
@@ -886,6 +1572,24 @@ class TexterUI(QMainWindow):
         action_layout.addWidget(self.export_btn)
         right_layout.addLayout(action_layout)
 
+        pack_layout = QHBoxLayout()
+        self.picker_btn = QPushButton("Quick Insert (Ctrl+Shift+I)")
+        self.picker_btn.clicked.connect(self.show_picker)
+        self.backups_btn = QPushButton("Backups")
+        self.backups_btn.clicked.connect(self.show_backups)
+        self.trash_btn = QPushButton("Trash")
+        self.trash_btn.clicked.connect(self.show_trash)
+        self.cleanup_btn = QPushButton("Cleanup")
+        self.cleanup_btn.clicked.connect(self.show_cleanup)
+        self.export_pack_btn = QPushButton("Export Pack")
+        self.export_pack_btn.clicked.connect(self.export_pack)
+        self.import_pack_btn = QPushButton("Import Pack")
+        self.import_pack_btn.clicked.connect(self.import_pack)
+        for b in (self.picker_btn, self.backups_btn, self.trash_btn,
+                  self.cleanup_btn, self.export_pack_btn, self.import_pack_btn):
+            pack_layout.addWidget(b)
+        right_layout.addLayout(pack_layout)
+
         main_layout.addWidget(right_group, 2)
 
         # System Tray Icon Setup
@@ -902,6 +1606,10 @@ class TexterUI(QMainWindow):
         show_action = QAction("Show Manager", self)
         show_action.triggered.connect(self.showNormal)
         tray_menu.addAction(show_action)
+
+        picker_action = QAction("Quick Insert", self)
+        picker_action.triggered.connect(self.show_picker)
+        tray_menu.addAction(picker_action)
         
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.quit_app)
@@ -1321,7 +2029,10 @@ class TexterUI(QMainWindow):
         if reply == QMessageBox.Yes:
             self.daemon.delete_snippet(trigger)
             self.refresh_snippet_list()
-            print(f"UI: Deleted snippet '{trigger}' (saved)")
+            self.statusBar().showMessage(
+                f"'{trigger}' moved to Trash (restore from Trash)", 4000
+            )
+            print(f"UI: Deleted snippet '{trigger}' (moved to Trash, saved)")
 
     def _sync_toggle_text(self):
         """Label the toggle buttons with their state, not just a color.
