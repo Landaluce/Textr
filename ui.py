@@ -382,8 +382,13 @@ class TexterUI(QMainWindow):
     SETTING_PLACEHOLDER_RE = re.compile(
         r"(?<![\{$])\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})"
     )
-    # Match this list to the built-ins actually supported by render_template().
-    BUILTIN_PLACEHOLDERS = frozenset({"name", "email", "date", "time"})
+    # Built-ins from daemon.get_context() (name, email, date, time, iso, week)
+    # plus clipboard from daemon.render_template(). These always win over a
+    # custom setting of the same name, so they must stay reserved.
+    BUILTIN_PLACEHOLDERS = frozenset(
+        {"name", "email", "date", "time", "iso", "week", "clipboard"}
+    )
+
 
     def add_user_setting_row(self, key="", value=""):
         row = self.user_settings_table.rowCount()
