@@ -43,6 +43,23 @@ dark_stylesheet = """
         border-radius: 6px;
         padding: 5px;
     }
+    /* Custom settings table only: keeps the old Catppuccin colors,
+       exempt from the briefing theme used elsewhere. */
+    QTableWidget {
+        background-color: #313244;
+        color: #cdd6f4;
+        border: 1px solid #45475a;
+        border-radius: 6px;
+        gridline-color: #45475a;
+        selection-background-color: #b4befe;
+        selection-color: #11111b;
+    }
+    QHeaderView::section {
+        background-color: #45475a;
+        color: #cdd6f4;
+        border: 1px solid #45475a;
+        padding: 5px;
+    }
     QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QTreeWidget:focus {
         border: 1px solid #ff9a3c;
     }
