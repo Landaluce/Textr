@@ -1,21 +1,21 @@
 dark_stylesheet = """
     QMainWindow, QDialog {
-        background-color: #1e1e2e;
-        color: #cdd6f4;
+        background-color: #0b0b0e;
+        color: #d6d6de;
     }
     QWidget {
-        background-color: #1e1e2e;
-        color: #cdd6f4;
+        background-color: #0b0b0e;
+        color: #d6d6de;
         font-family: 'Segoe UI', 'Ubuntu', 'Noto Sans', Arial, sans-serif;
         font-size: 14px;
     }
     QGroupBox {
-        border: 1px solid #45475a;
+        border: 1px solid #2e2e38;
         border-radius: 8px;
         margin-top: 15px;
         padding-top: 15px;
         font-weight: bold;
-        color: #cba6f7;
+        color: #ff9a3c;
     }
     QGroupBox::title {
         subcontrol-origin: margin;
@@ -24,12 +24,12 @@ dark_stylesheet = """
         padding: 0 5px;
     }
     QLineEdit, QTextEdit, QComboBox {
-        background-color: #313244;
-        color: #cdd6f4;
-        border: 1px solid #45475a;
+        background-color: #15151c;
+        color: #d6d6de;
+        border: 1px solid #2e2e38;
         border-radius: 6px;
         padding: 5px;
-        selection-background-color: #b4befe;
+        selection-background-color: #ff9a3c;
         selection-color: #11111b;
     }
     /* No selection-background-color here: it would make the view paint the
@@ -37,14 +37,14 @@ dark_stylesheet = """
        hover panels are drawn by SnippetTreeDelegate (ui.py), clipped to the
        item's own cell. */
     QTreeWidget {
-        background-color: #313244;
-        color: #cdd6f4;
-        border: 1px solid #45475a;
+        background-color: #15151c;
+        color: #d6d6de;
+        border: 1px solid #2e2e38;
         border-radius: 6px;
         padding: 5px;
     }
     QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QTreeWidget:focus {
-        border: 1px solid #b4befe;
+        border: 1px solid #ff9a3c;
     }
     QPushButton {
         background-color: #45475a;
@@ -78,6 +78,6 @@ dark_stylesheet = """
        gutter. Selection/hover panels are painted by SnippetTreeDelegate
        (ui.py), clipped to the item's own cell. */
     QLabel {
-        color: #bac2de;
+        color: #9a9aa5;
     }
     """
