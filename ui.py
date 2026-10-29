@@ -54,6 +54,34 @@ class SnippetTreeDelegate(QStyledItemDelegate):
     HOVER_BG = QColor("#2e2e38")
     RADIUS = 4
 
+    def initStyleOption(self, option, index):
+        """Force dark text on selected rows, like the table view.
+
+        The table's selection-color (#11111b on the orange highlight)
+        applies to every cell. The tree used to set that palette in
+        paint() before calling super().paint(), but super() re-runs
+        initStyleOption, which bakes the item's type colour back into
+        the palette — so a selected row kept its red/blue/green text on
+        orange. Overriding initStyleOption runs inside super().paint(),
+        after that baking, so the dark colour sticks. It checks the
+        view's selection model rather than option.state, because paint()
+        clears State_Selected before calling super() to keep the style's
+        own panel out of the indentation gutter.
+        """
+        super().initStyleOption(option, index)
+        view = option.widget
+        selected = False
+        if view is not None and hasattr(view, "selectionModel"):
+            try:
+                selected = view.selectionModel().isSelected(index)
+            except Exception:
+                selected = False
+        if not selected:
+            selected = bool(option.state & QStyle.State_Selected)
+        if selected:
+            option.palette.setColor(QPalette.Text, self.SELECT_FG)
+            option.palette.setColor(QPalette.HighlightedText, self.SELECT_FG)
+
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
         # Keep the style's own panel from stretching into the gutter too.
@@ -62,10 +90,8 @@ class SnippetTreeDelegate(QStyledItemDelegate):
         if opt.state & QStyle.State_Selected:
             panel = self.SELECT_BG
             opt.state &= ~QStyle.State_Selected
-            # Dark text over the light highlight; the item's foreground role
-            # (type color) is baked into palette Text by initStyleOption.
-            opt.palette.setColor(QPalette.Text, self.SELECT_FG)
-            opt.palette.setColor(QPalette.HighlightedText, self.SELECT_FG)
+            # Text colour is handled by initStyleOption (see above):
+            # setting the palette here would be overwritten by super().
         elif opt.state & QStyle.State_MouseOver:
             panel = self.HOVER_BG
             opt.state &= ~QStyle.State_MouseOver
