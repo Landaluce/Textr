@@ -553,6 +553,10 @@ class Daemon:
         except Exception:
             return None
 
+    def _xdotool_available(self):
+        """True when xdotool is installed (needed for exact focus restore)."""
+        return shutil.which("xdotool") is not None
+
     def _restore_active_window(self, wid):
         """Activate window `wid` (xdotool); True on success, else False."""
         if not wid:
