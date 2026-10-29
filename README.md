@@ -12,6 +12,7 @@ Text expansion for Linux, Windows, and macOS. Type a short trigger anywhere and 
 - **Grouped snippet manager** — group snippets by category (with `python/web`-style nested folders), by type, or by tag, with an optional second "then by" level (default: category → tag); search filters triggers, tags, and expansion text as you type; sort by name, recently used, or most used
 - **Tags & usage tracking** — snippets carry multiple comma-separated tags, and the daemon records how often and when each snippet expands
 - **Template variables** — `{name}`, `{email}`, `{date}`, `{time}`, `{iso}`, `{week}`, `{clipboard}`, plus `{cursor}` to leave the caret mid-expansion
+- - **Custom settings** — define your own placeholders, e.g. `{company}` or `{first_name}`, in **Settings → Custom settings**. Textr scans your snippets for `{placeholder}` names, adds missing ones automatically on startup and after import (or click **Find missing settings**), and warns about values not yet filled in. Built-ins (`{name}`, `{email}`, `{date}`, `{time}`, `{iso}`, `{week}`, `{clipboard}`) are reserved and can't be redefined.
 - **Per-snippet enable/disable** — turn a snippet off (edit → uncheck **Enabled**) without deleting it; disabled snippets are dimmed in the tree and never expand
 - **Configurable date/time formats** — set the strftime patterns for `{date}`/`{time}` (and `:d`/`:time`/`:datetime`) in the profile settings, e.g. `%d/%m/%Y` for day-first dates
 - **Safe import** — importing a JSON file warns about triggers it will overwrite before applying
@@ -141,8 +142,8 @@ Data files are looked up in this order:
    - Linux: `$XDG_CONFIG_HOME/textr/` (defaults to `~/.config/textr/`)
    - Windows: `%APPDATA%/Textr/`
    - macOS: `~/Library/Application Support/Textr/`
-
-- `config.json` — user profile (`name`, `email`, `layout`, `language`, `paste_hotkey`, `date_format`, `time_format`)
+ 
+- `config.json` — user profile (`name`, `email`, `layout`, `language`, `paste_hotkey`, `date_format`, `time_format`) plus custom settings (`user_settings`)
 - `snippets.json` — all snippet definitions
 
 The paste shortcut used in clipboard mode defaults to `Ctrl+Shift+V` (`Cmd+V` on fresh macOS installs) and is configurable
