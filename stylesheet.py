@@ -92,6 +92,20 @@ dark_stylesheet = """
         background-color: #2e2e38;
         border: 1px solid #ff9a3c;
     }
+    /* Primary action (Quick Insert): the one orange button, so it reads
+       as the main action rather than one of many equal buttons. */
+    QPushButton#primary_btn {
+        background-color: #ff9a3c;
+        color: #11111b;
+        border: 1px solid #ff9a3c;
+    }
+    QPushButton#primary_btn:hover {
+        background-color: #ffa64d;
+        border: 1px solid #ffa64d;
+    }
+    QPushButton#primary_btn:pressed {
+        background-color: #e07f1f;
+    }
     QPushButton:pressed {
         background-color: #0b0b0e;
     }
