@@ -316,6 +316,51 @@ class UsedByTableWidgetItem(QTableWidgetItem):
         return super().__lt__(other)
 
 
+class SortableTableWidgetItem(QTableWidgetItem):
+    """Table cell that sorts by a stored UserRole key, not its text.
+
+    Text columns store a lowercased key (so ";Sig" and ";sig" sort
+    together), Uses stores an int (so 10 sorts above 2), and Last used
+    stores the raw ISO timestamp ("" for never, so never-used rows sort
+    first ascending / last descending). Falls back to plain text sort
+    when either side has no stored key.
+    """
+
+    def __lt__(self, other):
+        self_key = self.data(Qt.ItemDataRole.UserRole)
+        other_key = other.data(Qt.ItemDataRole.UserRole)
+        if self_key is not None and other_key is not None:
+            try:
+                return self_key < other_key
+            except TypeError:
+                pass
+        return super().__lt__(other)
+
+
+class SnippetTableWidget(QTableWidget):
+    """Snippet table; right-click menu mirrors the tree's menu."""
+
+    def contextMenuEvent(self, event):
+        item = self.itemAt(event.pos())
+        if item is None:
+            return
+        trigger_item = self.item(item.row(), 0)
+        if trigger_item is None or trigger_item.data(Qt.UserRole + 1) is None:
+            return
+        self.setCurrentCell(item.row(), 0)
+        window = self.window()
+        trigger = trigger_item.data(Qt.UserRole + 1)
+        snippet = window.daemon.snippets.get(trigger, {}) if window.daemon else {}
+        enabled = snippet.get("enabled", True) if isinstance(snippet, dict) else True
+        menu = QMenu(self)
+        menu.addAction("Edit", window.edit_snippet)
+        menu.addAction("Duplicate", window.duplicate_snippet)
+        menu.addAction("Disable" if enabled else "Enable", window.toggle_snippet_enabled)
+        menu.addSeparator()
+        menu.addAction("Delete", window.delete_snippet)
+        menu.exec(event.globalPos())
+
+
 
 class PromptValuesDialog(QDialog):
     """Ask for per-use placeholder values at expansion time.
@@ -1483,6 +1528,13 @@ class TexterUI(QMainWindow):
         self.sort_combo.addItem("Most used", "used")
         self.sort_combo.currentIndexChanged.connect(self.refresh_snippet_list)
         sort_layout.addWidget(self.sort_combo)
+        sort_layout.addWidget(QLabel("View:"))
+        self.view_combo = QComboBox()
+        self.view_combo.addItem("Tree", "tree")
+        self.view_combo.addItem("Table", "table")
+        self.view_combo.setCurrentIndex(self.view_combo.findData("table"))
+        self.view_combo.currentIndexChanged.connect(self._on_view_changed)
+        sort_layout.addWidget(self.view_combo)
         left_layout.addLayout(sort_layout)
 
         # Snippet tree (groupable list); font comes from the QSS stylesheet.
@@ -1492,6 +1544,42 @@ class TexterUI(QMainWindow):
         self.snippet_list.setDragDropMode(QAbstractItemView.InternalMove)
         self.snippet_list.itemSelectionChanged.connect(self.on_selection_changed)
         left_layout.addWidget(self.snippet_list)
+
+        # Snippet table: flat, sortable view of the same snippets.
+        # Grouping does not apply here (Category is a column instead).
+        self.snippet_table = SnippetTableWidget(0, 7)
+        self.snippet_table.setObjectName("snippet_table")
+        self.snippet_table.setHorizontalHeaderLabels(
+            ["Trigger", "Type", "Category", "Tags", "Uses", "Last used", "Preview"]
+        )
+        table_header = self.snippet_table.horizontalHeader()
+        table_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        table_header.setStretchLastSection(True)
+        self.snippet_table.setColumnWidth(0, 140)
+        self.snippet_table.setColumnWidth(1, 90)
+        self.snippet_table.setColumnWidth(2, 120)
+        self.snippet_table.setColumnWidth(3, 140)
+        self.snippet_table.setColumnWidth(4, 60)
+        self.snippet_table.setColumnWidth(5, 130)
+        self.snippet_table.verticalHeader().setVisible(False)
+        self.snippet_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.snippet_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.snippet_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.snippet_table.setSortingEnabled(True)
+        # Qt defaults the sort indicator to column 0 descending; clear it
+        # so the first fill keeps the sort-combo order until the user
+        # actually clicks a header.
+        table_header.setSortIndicator(-1, Qt.AscendingOrder)
+        self.snippet_table.itemSelectionChanged.connect(self.on_selection_changed)
+        self.snippet_table.itemDoubleClicked.connect(lambda *args: self.edit_snippet())
+        left_layout.addWidget(self.snippet_table)
+        self._apply_snippet_view()
 
         # Add/Edit/Delete buttons (shortcuts shown inline in the labels so
         # they're visible without hovering; tooltips add the details)
@@ -1522,6 +1610,15 @@ class TexterUI(QMainWindow):
         self.delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.snippet_list)
         self.delete_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.delete_shortcut.activated.connect(self.delete_snippet)
+        # Same edit/delete shortcuts, scoped to the table so they work
+        # when the table (not the tree) has focus.
+        for seq in (QKeySequence("F2"), QKeySequence(Qt.Key_Return), QKeySequence(Qt.Key_Enter)):
+            shortcut = QShortcut(seq, self.snippet_table)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self.edit_snippet)
+        self.delete_shortcut_table = QShortcut(QKeySequence(Qt.Key_Delete), self.snippet_table)
+        self.delete_shortcut_table.setContext(Qt.WidgetWithChildrenShortcut)
+        self.delete_shortcut_table.activated.connect(self.delete_snippet)
 
         main_layout.addWidget(left_group, 1)
 
@@ -1735,13 +1832,101 @@ class TexterUI(QMainWindow):
             return f"Command: {snippet.get('action')}"
         return ""
 
+    def _is_table_view(self):
+        """True when the Table view (not the Tree view) is active."""
+        view = getattr(self, "view_combo", None)
+        return view is not None and view.currentData() == "table"
+
+    def _apply_snippet_view(self):
+        """Show the active snippet view; grouping only applies to the tree."""
+        is_table = self._is_table_view()
+        self.snippet_list.setVisible(not is_table)
+        self.snippet_table.setVisible(is_table)
+        self.group_combo.setEnabled(not is_table)
+        self.subgroup_combo.setEnabled(
+            not is_table and self.group_combo.currentData() != "none"
+        )
+
+    def _on_view_changed(self):
+        """View switcher: show the chosen view and rebuild it."""
+        self._apply_snippet_view()
+        self.refresh_snippet_list()
+
+    def selected_trigger(self):
+        """Trigger of the selected snippet in whichever view is active."""
+        if self._is_table_view() and hasattr(self, "snippet_table"):
+            row = self.snippet_table.currentRow()
+            if row < 0:
+                return None
+            item = self.snippet_table.item(row, 0)
+            return item.data(Qt.UserRole + 1) if item is not None else None
+        selected = self.snippet_list.selectedItems()
+        if not selected:
+            return None
+        return selected[0].data(0, Qt.UserRole)
+
+    def _table_preview_text(self, snippet):
+        """One-line preview for the table's Preview column."""
+        preview = " ".join(str(self.get_expansion_preview(snippet)).split())
+        return preview if len(preview) <= 80 else preview[:79] + "\u2026"
+
+    def _refresh_snippet_table(self, items, selected_before):
+        """Fill the table with (trigger, snippet) pairs, keeping sort/selection."""
+        table = self.snippet_table
+        header = table.horizontalHeader()
+        sort_section = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        table.setSortingEnabled(False)
+        table.setRowCount(0)
+        for trigger, snippet in items:
+            row = table.rowCount()
+            table.insertRow(row)
+            snippet_type = snippet.get("type", "variable")
+            category = snippet.get("category", "uncategorized")
+            enabled = snippet.get("enabled", True)
+            tags = snippet.get("tags") or []
+            uses = int(snippet.get("usage", 0))
+            last_used = snippet.get("last_used") or "never"
+            state = " | DISABLED" if not enabled else ""
+            preview = self._table_preview_text(snippet)
+            cells = [
+                (trigger, trigger.lower()),
+                (snippet_type, snippet_type.lower()),
+                (category, category.lower()),
+                (", ".join(tags), ", ".join(tags).lower()),
+                (str(uses), uses),
+                (last_used, last_used if last_used != "never" else ""),
+                (preview, preview.lower()),
+            ]
+            for col, (text, sort_key) in enumerate(cells):
+                cell = SortableTableWidgetItem(text)
+                cell.setData(Qt.ItemDataRole.UserRole, sort_key)
+                if col == 0:
+                    # Trigger lives in UserRole + 1: UserRole holds the sort key.
+                    cell.setData(Qt.UserRole + 1, trigger)
+                    cell.setForeground(
+                        QColor(self.DISABLED_COLOR if not enabled else self.TYPE_COLORS.get(snippet_type, "#d6d6de"))
+                    )
+                    cell.setToolTip(f"{snippet_type.capitalize()} | Category: {category}{state}")
+                table.setItem(row, col, cell)
+        if sort_section < 0:
+            # No header sort yet: clear the indicator before re-enabling
+            # sorting, or Qt would sort by column 0 descending on enable.
+            header.setSortIndicator(-1, Qt.AscendingOrder)
+        table.setSortingEnabled(True)
+        if sort_section >= 0:
+            table.sortItems(sort_section, sort_order)
+        if selected_before:
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item is not None and item.data(Qt.UserRole + 1) == selected_before:
+                    table.setCurrentCell(row, 0)
+                    break
+
     def refresh_snippet_list(self):
         # Remember the selection so rebuilds (search, language switch, daemon
         # refresh) don't drop it - the user shouldn't have to re-click.
-        selected_before = None
-        selected = self.snippet_list.selectedItems()
-        if selected:
-            selected_before = selected[0].data(0, Qt.UserRole)
+        selected_before = self.selected_trigger()
 
         self.snippet_list.clear()
 
@@ -1767,6 +1952,11 @@ class TexterUI(QMainWindow):
             if self._matches_search(trigger, snippet, query)
         ]
         self._sort_items(items)
+
+        if self._is_table_view():
+            self._refresh_snippet_table(items, selected_before)
+            self.refresh_user_setting_usage()
+            return
 
         group_mode = self.group_combo.currentData()
         sub_mode = self.subgroup_combo.currentData()
@@ -1935,13 +2125,8 @@ class TexterUI(QMainWindow):
         print(f"UI: Showing {category} snippets")
 
     def on_selection_changed(self):
-        selected = self.snippet_list.selectedItems()
-        if not selected or not self.daemon:
-            self.preview_text.clear()
-            return
-
-        trigger = selected[0].data(0, Qt.UserRole)
-        if not trigger:  # a group header, not a snippet
+        trigger = self.selected_trigger()
+        if not trigger or not self.daemon:
             self.preview_text.clear()
             return
         snippet = self.daemon.snippets.get(trigger)
@@ -2046,12 +2231,8 @@ class TexterUI(QMainWindow):
                 print(f"UI: Added snippet '{trigger}' (saved)")
 
     def edit_snippet(self):
-        selected = self.snippet_list.selectedItems()
-        if not selected or not self.daemon:
-            return
-
-        trigger = selected[0].data(0, Qt.UserRole)
-        if not trigger:  # group headers aren't editable
+        trigger = self.selected_trigger()
+        if not trigger or not self.daemon:
             return
         snippet = {"trigger": trigger, **self.daemon.snippets.get(trigger, {})}
 
@@ -2069,12 +2250,8 @@ class TexterUI(QMainWindow):
 
     def duplicate_snippet(self):
         """Clone the selected snippet into a pre-filled Add dialog."""
-        selected = self.snippet_list.selectedItems()
-        if not selected or not self.daemon:
-            return
-
-        trigger = selected[0].data(0, Qt.UserRole)
-        if not trigger:  # group headers aren't duplicable
+        trigger = self.selected_trigger()
+        if not trigger or not self.daemon:
             return
         source = dict(self.daemon.snippets.get(trigger, {}))
         # Pre-fill everything except the trigger so the user types a new one.
@@ -2095,12 +2272,8 @@ class TexterUI(QMainWindow):
 
     def toggle_snippet_enabled(self):
         """Flip the enabled flag of the selected snippet and persist it."""
-        selected = self.snippet_list.selectedItems()
-        if not selected or not self.daemon:
-            return
-
-        trigger = selected[0].data(0, Qt.UserRole)
-        if not trigger:  # group headers aren't snippets
+        trigger = self.selected_trigger()
+        if not trigger or not self.daemon:
             return
         snippet = dict(self.daemon.snippets.get(trigger, {}))
         snippet["enabled"] = not snippet.get("enabled", True)
@@ -2110,12 +2283,8 @@ class TexterUI(QMainWindow):
         print(f"UI: {state} snippet '{trigger}' (saved)")
 
     def delete_snippet(self):
-        selected = self.snippet_list.selectedItems()
-        if not selected or not self.daemon:
-            return
-
-        trigger = selected[0].data(0, Qt.UserRole)
-        if not trigger:  # group headers aren't deletable
+        trigger = self.selected_trigger()
+        if not trigger or not self.daemon:
             return
         reply = QMessageBox.question(self, "Confirm", f"Delete '{trigger}'?")
         if reply == QMessageBox.Yes:
