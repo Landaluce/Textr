@@ -1729,9 +1729,20 @@ class TexterUI(QMainWindow):
         right_layout.addWidget(settings_group)
 
 
-        # Buttons
-        action_layout = QHBoxLayout()
+        # Bottom controls, grouped by intent instead of two flat rows of
+        # equal buttons (11 buttons, mixing toggles, exit, data, and tools):
+        #
+        # - Daemon / Human Typing are persistent states, so they live as
+        #   clickable pills in the status bar, always visible.
+        # - Quick Insert is the daily action, so it is the one primary
+        #   button, on its own row.
+        # - Import/Export (JSON and packs) sit behind one Library menu;
+        #   Backups / Trash / Cleanup stay as secondary buttons.
+        # - No Quit button: the window's X already quits (closeEvent ->
+        #   quit_app, saving and stopping the daemon), and the tray menu
+        #   has Quit too.
 
+        # Status-bar toggles.
         self.toggle_daemon_btn = QPushButton("Daemon")
         self.toggle_daemon_btn.setObjectName("toggle_daemon_btn")
         self.toggle_daemon_btn.setCheckable(True)
@@ -1744,40 +1755,37 @@ class TexterUI(QMainWindow):
         self.toggle_writing_btn.setChecked(self.daemon.writing_mode if self.daemon else False)
         self.toggle_writing_btn.toggled.connect(self.toggle_writing_mode)
         self._sync_toggle_text()
+        self.statusBar().addPermanentWidget(self.toggle_daemon_btn)
+        self.statusBar().addPermanentWidget(self.toggle_writing_btn)
 
-        self.quit_btn = QPushButton("Quit")
-        self.quit_btn.clicked.connect(self.quit_button)
-
-        self.import_btn = QPushButton("Import JSON")
-        self.import_btn.clicked.connect(self.import_json)
-
-        self.export_btn = QPushButton("Export JSON")
-        self.export_btn.clicked.connect(self.export_json)
-
-        action_layout.addWidget(self.toggle_daemon_btn)
-        action_layout.addWidget(self.toggle_writing_btn)
-        action_layout.addWidget(self.quit_btn)
-        action_layout.addWidget(self.import_btn)
-        action_layout.addWidget(self.export_btn)
-        right_layout.addLayout(action_layout)
-
-        pack_layout = QHBoxLayout()
+        # Primary action row: Quick Insert only.
+        primary_layout = QHBoxLayout()
         self.picker_btn = QPushButton("Quick Insert (Ctrl+Alt+Space)")
+        self.picker_btn.setObjectName("primary_btn")
         self.picker_btn.clicked.connect(self.show_picker)
+        primary_layout.addWidget(self.picker_btn)
+        right_layout.addLayout(primary_layout)
+
+        # Secondary row: Library menu + maintenance tools.
+        library_layout = QHBoxLayout()
+        self.library_menu = QMenu(self)
+        self.library_menu.addAction("Import JSON", self.import_json)
+        self.library_menu.addAction("Export JSON", self.export_json)
+        self.library_menu.addSeparator()
+        self.library_menu.addAction("Import Pack", self.import_pack)
+        self.library_menu.addAction("Export Pack", self.export_pack)
+        self.library_btn = QPushButton("Library")
+        self.library_btn.setMenu(self.library_menu)
+        library_layout.addWidget(self.library_btn)
         self.backups_btn = QPushButton("Backups")
         self.backups_btn.clicked.connect(self.show_backups)
         self.trash_btn = QPushButton("Trash")
         self.trash_btn.clicked.connect(self.show_trash)
         self.cleanup_btn = QPushButton("Cleanup")
         self.cleanup_btn.clicked.connect(self.show_cleanup)
-        self.export_pack_btn = QPushButton("Export Pack")
-        self.export_pack_btn.clicked.connect(self.export_pack)
-        self.import_pack_btn = QPushButton("Import Pack")
-        self.import_pack_btn.clicked.connect(self.import_pack)
-        for b in (self.picker_btn, self.backups_btn, self.trash_btn,
-                  self.cleanup_btn, self.export_pack_btn, self.import_pack_btn):
-            pack_layout.addWidget(b)
-        right_layout.addLayout(pack_layout)
+        for b in (self.backups_btn, self.trash_btn, self.cleanup_btn):
+            library_layout.addWidget(b)
+        right_layout.addLayout(library_layout)
 
         main_layout.addWidget(right_group, 2)
 
@@ -2350,15 +2358,6 @@ class TexterUI(QMainWindow):
         self.toggle_writing_btn.blockSignals(False)
         self._sync_toggle_text()
         print(f"UI: Human typing {'enabled' if checked else 'disabled'}")
-
-    def quit_button(self):
-        """Button handler for manual quit.
-
-        Same code path as the window's X button (closeEvent) and the tray
-        Quit action: quit_app() saves snippets, stops the daemon, hides the
-        tray icon, and exits the application.
-        """
-        self.quit_app()
 
     def import_json(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Import Snippets", "", "JSON Files (*.json)")
