@@ -47,30 +47,30 @@ dark_stylesheet = """
         border: 1px solid #ff9a3c;
     }
     QPushButton {
-        background-color: #45475a;
-        color: #cdd6f4;
-        border: none;
+        background-color: #15151c;
+        color: #d6d6de;
+        border: 1px solid #2e2e38;
         border-radius: 6px;
         padding: 8px 12px;
         font-weight: bold;
     }
     QPushButton:hover {
-        background-color: #585b70;
-        border: 1px solid #b4befe;
+        background-color: #2e2e38;
+        border: 1px solid #ff9a3c;
     }
     QPushButton:pressed {
-        background-color: #313244;
+        background-color: #0b0b0e;
     }
-    /* State-colored toggles (green when active, red when inactive):
+    /* State-colored toggles (orange when active, muted when inactive):
        Daemon button and Human Typing button */
     QPushButton#toggle_daemon_btn:!checked,
     QPushButton#toggle_writing_btn:!checked {
-        background-color: #f38ba8;
-        color: #11111b;
+        background-color: #15151c;
+        color: #9a9aa5;
     }
     QPushButton#toggle_daemon_btn:checked,
     QPushButton#toggle_writing_btn:checked {
-        background-color: #a6e3a1;
+        background-color: #ff9a3c;
         color: #11111b;
     }
     /* No QTreeWidget::item rules on purpose: the stylesheet engine stretches
