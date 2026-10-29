@@ -384,11 +384,12 @@ class QuickInsertDialog(QDialog):
     listed (commands act on the manager, they do not insert text).
     """
 
-    def __init__(self, daemon, ui, target_window=None):
+    def __init__(self, daemon, ui, target_window=None, from_hotkey=False):
         super().__init__(None)
         self.daemon = daemon
         self.ui = ui
         self.target_window = target_window
+        self.pending_insert = None
         self.setWindowTitle("Quick Insert")
         self.setWindowFlags(
             self.windowFlags() | Qt.WindowStaysOnTopHint | Qt.Tool
@@ -410,6 +411,19 @@ class QuickInsertDialog(QDialog):
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        if (
+            from_hotkey
+            and target_window is None
+            and daemon is not None
+            and not daemon.wayland
+            and not daemon._xdotool_available()
+        ):
+            warn = QLabel(
+                "xdotool not found: focus restore after picking may be "
+                "unreliable. Install it with: sudo apt install xdotool"
+            )
+            warn.setWordWrap(True)
+            layout.addWidget(warn)
         self._refresh_list()
         self.search.setFocus()
 
@@ -495,19 +509,15 @@ class QuickInsertDialog(QDialog):
                 self.reject()
                 return
         final = self.daemon.render_template(raw, prompt_values=values)
+        # Do NOT restore focus or schedule the insert here: restoring
+        # before accept() is undone when the dialog closes, because Qt
+        # (and the window manager, following the mouse) reactivates
+        # Textr's manager window on close, and the paste then lands in
+        # whatever window ends up on top behind the picker. Instead,
+        # stash the pending insert; show_picker() restores the target
+        # window AFTER exec() returns and only then schedules the insert.
+        self.pending_insert = (trigger, final)
         self.hide()
-        # Aim insertion back at the window that was active when the
-        # hotkey was pressed. Qt alone cannot do this: closing a Textr
-        # dialog reactivates Textr's own manager window, so without an
-        # explicit restore the paste lands in the manager (the window
-        # behind the picker) instead of the target app. xdotool restore
-        # is exact when available; otherwise the lowered manager + a
-        # longer delay is the fallback.
-        restored = False
-        if self.target_window and self.daemon:
-            restored = self.daemon._restore_active_window(self.target_window)
-        delay = 500 if restored else 400
-        self.ui._schedule_picker_insert(trigger, final, delay)
         self.accept()
 
 
@@ -874,7 +884,8 @@ class TexterUI(QMainWindow):
             self.bring_to_front()
         elif action == "picker":
             self.show_picker(
-                getattr(self.daemon, "_picker_target_window", None)
+                getattr(self.daemon, "_picker_target_window", None),
+                from_hotkey=True,
             )
         elif action == "hide":
             self.hide_window()
@@ -1194,7 +1205,7 @@ class TexterUI(QMainWindow):
             self.refresh_user_setting_usage()
 
     # ---- Quick picker ----------------------------------------------------
-    def show_picker(self, target_window=None):
+    def show_picker(self, target_window=None, from_hotkey=False):
         if not self.daemon:
             return
         # Lower the manager before the picker opens: after the picker
@@ -1204,7 +1215,29 @@ class TexterUI(QMainWindow):
             self.lower()
         except Exception:
             pass
-        QuickInsertDialog(self.daemon, self, target_window).exec()
+        dialog = QuickInsertDialog(
+            self.daemon, self, target_window, from_hotkey
+        )
+        result = dialog.exec()
+        if result != QDialog.Accepted or not dialog.pending_insert:
+            return
+        trigger, final = dialog.pending_insert
+        # Restore AFTER the dialog has closed: this is the focus action
+        # that must win. Restoring before accept() (the old code) was
+        # overwritten by Qt reactivating the manager on close, which is
+        # why the paste landed in whatever window was behind the picker.
+        # Lower the manager again first, so even without xdotool the
+        # target app is the topmost window left.
+        try:
+            self.lower()
+        except Exception:
+            pass
+        restored = False
+        if target_window and self.daemon:
+            restored = self.daemon._restore_active_window(target_window)
+        self._schedule_picker_insert(
+            trigger, final, 500 if restored else 400
+        )
 
     def _insert_picker_selection(self, trigger, text):
         if self.daemon:
