@@ -783,9 +783,11 @@ class TexterUI(QMainWindow):
         self.user_settings_table.setHorizontalHeaderLabels(
             ["Setting", "Value", "Used by"]
         )
-        self.user_settings_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
+        header = self.user_settings_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
+        self.user_settings_table.setColumnWidth(0, 150)
+        self.user_settings_table.setColumnWidth(1, 220)
         self.user_settings_table.verticalHeader().setVisible(False)
         self.user_settings_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
