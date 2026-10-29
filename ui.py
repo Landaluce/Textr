@@ -394,6 +394,11 @@ class TexterUI(QMainWindow):
         self.user_settings_table.insertRow(row)
         self.user_settings_table.setItem(row, 0, QTableWidgetItem(key))
         self.user_settings_table.setItem(row, 1, QTableWidgetItem(value))
+        used_by_item = QTableWidgetItem("")
+        used_by_item.setFlags(
+            Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+        )
+        self.user_settings_table.setItem(row, 2, used_by_item)
         return row
 
     def add_user_setting(self):
@@ -454,6 +459,64 @@ class TexterUI(QMainWindow):
                         references.setdefault(key, set()).add(str(trigger))
         return references
 
+    def refresh_user_setting_usage(self):
+        """Fill the read-only "Used by" column for every custom setting row.
+    
+                For each setting this shows how many times it is referenced in total
+                and in how many snippets, plus which snippet triggers use it, e.g.
+                "3 uses in 2 snippets: hello, sig". A setting no snippet uses shows
+                "0 snippets". This column is display-only: collect_user_settings()
+                reads only columns 0 and 1, so it can never be saved into config.
+                """
+        if not hasattr(self, "user_settings_table"):
+            return
+        triggers_by_key = {}
+        uses_by_key = {}
+        if self.daemon:
+            with self.daemon.snippets_lock:
+                snippets = deepcopy(self.daemon.snippets)
+            for trigger, snippet in snippets.items():
+                if not isinstance(snippet, dict):
+                    continue
+                kind = snippet.get("type", "variable")
+                texts = []
+                if kind == "variable":
+                    texts.append(snippet.get("value", ""))
+                elif kind == "template":
+                    languages = snippet.get("languages", {})
+                    if isinstance(languages, dict):
+                        texts.extend(languages.values())
+                for text in texts:
+                    if not isinstance(text, str):
+                        continue
+                    for key in self.SETTING_PLACEHOLDER_RE.findall(text):
+                        triggers_by_key.setdefault(key, set()).add(str(trigger))
+                        uses_by_key[key] = uses_by_key.get(key, 0) + 1
+        for row in range(self.user_settings_table.rowCount()):
+            key_item = self.user_settings_table.item(row, 0)
+            key = key_item.text().strip() if key_item else ""
+            triggers = sorted(triggers_by_key.get(key, set())) if key else []
+            if triggers:
+                snippet_word = "snippet" if len(triggers) == 1 else "snippets"
+                use_word = "use" if uses_by_key[key] == 1 else "uses"
+                text = (
+                    f"{len(triggers)} {snippet_word}, "
+                    f"{uses_by_key[key]} {use_word}: " + ", ".join(triggers)
+                )
+                tooltip = "Used by snippets: " + ", ".join(triggers)
+            else:
+                text = "0 snippets"
+                tooltip = "Not used by any snippet"
+            used_by_item = self.user_settings_table.item(row, 2)
+            if used_by_item is None:
+                used_by_item = QTableWidgetItem("")
+                used_by_item.setFlags(
+                    Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+                )
+                self.user_settings_table.setItem(row, 2, used_by_item)
+            used_by_item.setText(text)
+            used_by_item.setToolTip(tooltip)
+
     def find_missing_user_settings(self, checked=False, *, notify=True):
         if not self.daemon:
             return
@@ -508,6 +571,7 @@ class TexterUI(QMainWindow):
                 f"Found {len(added)} missing custom setting(s). "
                 "Fill them in and click Save Settings.", 8000
             )
+        self.refresh_user_setting_usage()
 
     def save_user_config(self):
         if not self.daemon:
@@ -715,8 +779,10 @@ class TexterUI(QMainWindow):
         settings_layout.addRow("Paste shortcut:", self.paste_hotkey_edit)
         settings_layout.addRow("Date format:", self.date_format_edit)
         settings_layout.addRow("Time format:", self.time_format_edit)
-        self.user_settings_table = QTableWidget(0, 2)
-        self.user_settings_table.setHorizontalHeaderLabels(["Setting", "Value"])
+        self.user_settings_table = QTableWidget(0, 3)
+        self.user_settings_table.setHorizontalHeaderLabels(
+            ["Setting", "Value", "Used by"]
+        )
         self.user_settings_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
@@ -740,9 +806,10 @@ class TexterUI(QMainWindow):
         self.find_missing_settings_btn.clicked.connect(self.find_missing_user_settings)
         settings_layout.addRow(self.find_missing_settings_btn)
         hint = QLabel(
-            "Double-click cells to edit. Missing {setting_name} placeholders are "
-            "added automatically on startup and after imports. "
-            "Fill in values and click Save Settings."
+            "Double-click Setting/Value cells to edit. The Used by column shows "
+            "how many snippets use each setting and which ones. Missing "
+            "{setting_name} placeholders are added automatically on startup and "
+            "after imports. Fill in values and click Save Settings."
         )
         hint.setWordWrap(True)
         settings_layout.addRow(hint)
@@ -895,6 +962,7 @@ class TexterUI(QMainWindow):
             item = self.snippet_list.find_item(selected_before)
             if item is not None:
                 self.snippet_list.setCurrentItem(item)
+        self.refresh_user_setting_usage()
 
     def _matches_search(self, trigger, snippet, query):
         """True if the trigger, tags, or any expansion text contains the query."""
