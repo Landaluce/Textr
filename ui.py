@@ -109,9 +109,11 @@ class SnippetTreeWidget(QTreeWidget):
         """The right-click menu for a snippet row, wired to the window handlers."""
         snippet = window.daemon.snippets.get(trigger, {}) if window.daemon else {}
         enabled = snippet.get("enabled", True) if isinstance(snippet, dict) else True
+        favorite = bool(snippet.get("favorite")) if isinstance(snippet, dict) else False
         menu = QMenu(self)
         menu.addAction("Edit", window.edit_snippet)
         menu.addAction("Duplicate", window.duplicate_snippet)
+        menu.addAction("Unfavourite" if favorite else "Favourite", window.toggle_snippet_favorite)
         menu.addAction("Disable" if enabled else "Enable", window.toggle_snippet_enabled)
         menu.addSeparator()
         menu.addAction("Delete", window.delete_snippet)
@@ -129,6 +131,7 @@ class SnippetTreeWidget(QTreeWidget):
             target is None or dragged is None
             or target.data(0, Qt.UserRole) is not None  # not a group node
             or dragged.data(0, Qt.UserRole) is None     # dragged a group, not a snippet
+            or target.data(0, Qt.UserRole + 2) is not None  # virtual section, not a category
         ):
             event.ignore()
             return
@@ -352,9 +355,11 @@ class SnippetTableWidget(QTableWidget):
         trigger = trigger_item.data(Qt.UserRole + 1)
         snippet = window.daemon.snippets.get(trigger, {}) if window.daemon else {}
         enabled = snippet.get("enabled", True) if isinstance(snippet, dict) else True
+        favorite = bool(snippet.get("favorite")) if isinstance(snippet, dict) else False
         menu = QMenu(self)
         menu.addAction("Edit", window.edit_snippet)
         menu.addAction("Duplicate", window.duplicate_snippet)
+        menu.addAction("Unfavourite" if favorite else "Favourite", window.toggle_snippet_favorite)
         menu.addAction("Disable" if enabled else "Enable", window.toggle_snippet_enabled)
         menu.addSeparator()
         menu.addAction("Delete", window.delete_snippet)
@@ -1636,13 +1641,45 @@ class TexterUI(QMainWindow):
         lang_layout.addWidget(self.language_combo)
         right_layout.addLayout(lang_layout)
 
-        # Preview area
-        preview_layout = QHBoxLayout()
-        preview_layout.addWidget(QLabel("Template Preview:"))
+        # Preview area: structured details like the tree mockup, not one
+        # block of text. Category / Tags / Type / Trigger as labelled
+        # values, a Used line, the rendered expansion, and Copy/Insert.
+        preview_layout = QVBoxLayout()
+        detail_layout = QHBoxLayout()
+        self.preview_detail_labels = {}
+        for key, title in (("category", "Category"), ("tags", "Tags"),
+                           ("type", "Type"), ("trigger", "Trigger")):
+            column = QVBoxLayout()
+            column.addWidget(QLabel(title))
+            value = QLabel("\u2014")
+            value.setWordWrap(True)
+            if key == "trigger":
+                trigger_font = value.font()
+                trigger_font.setBold(True)
+                value.setFont(trigger_font)
+            column.addWidget(value)
+            detail_layout.addLayout(column)
+            self.preview_detail_labels[key] = value
+        preview_layout.addLayout(detail_layout)
+        self.preview_used_label = QLabel("Select a snippet to preview")
+        preview_layout.addWidget(self.preview_used_label)
+        preview_layout.addWidget(QLabel("Expanded text:"))
         self.preview_text = QTextEdit()
         self.preview_text.setReadOnly(True)
         self.preview_text.setPlaceholderText("Select a template snippet to preview")
         preview_layout.addWidget(self.preview_text)
+        preview_btn_layout = QHBoxLayout()
+        self.preview_copy_btn = QPushButton("Copy")
+        self.preview_copy_btn.setToolTip("Copy the rendered expansion to the clipboard")
+        self.preview_copy_btn.clicked.connect(self.copy_preview)
+        self.preview_copy_btn.setEnabled(False)
+        self.preview_insert_btn = QPushButton("Insert")
+        self.preview_insert_btn.setToolTip("Hide the manager and insert the expansion into the focused app")
+        self.preview_insert_btn.clicked.connect(self.insert_preview)
+        self.preview_insert_btn.setEnabled(False)
+        preview_btn_layout.addWidget(self.preview_copy_btn)
+        preview_btn_layout.addWidget(self.preview_insert_btn)
+        preview_layout.addLayout(preview_btn_layout)
         right_layout.addLayout(preview_layout)
 
         # User settings panel
@@ -1909,6 +1946,8 @@ class TexterUI(QMainWindow):
                 (preview, preview.lower()),
             ]
             for col, (text, sort_key) in enumerate(cells):
+                if col == 0 and snippet.get("favorite"):
+                    text = f"\u2605 {text}"
                 cell = SortableTableWidgetItem(text)
                 cell.setData(Qt.ItemDataRole.UserRole, sort_key)
                 if col == 0:
@@ -1974,6 +2013,25 @@ class TexterUI(QMainWindow):
             for trigger, snippet in items:
                 self._add_snippet_item(self.snippet_list, trigger, snippet)
         else:
+            # Virtual sections first: the 3 most recently used snippets,
+            # then favourited snippets. Both are views of `items` (already
+            # search/category filtered), so a snippet also appears under
+            # its regular group, as with tag grouping.
+            recent = [
+                (t, s) for t, s in items
+                if (s.get("last_used") or "never") != "never"
+            ]
+            recent.sort(key=lambda kv: (kv[1].get("last_used") or "", kv[0].lower()), reverse=True)
+            recent = recent[:3]
+            if recent:
+                parent = self._ensure_group(self.snippet_list, "Recent", virtual=True)
+                for trigger, snippet in recent:
+                    self._add_snippet_item(parent, trigger, snippet)
+            favorites = [(t, s) for t, s in items if s.get("favorite")]
+            if favorites:
+                parent = self._ensure_group(self.snippet_list, "Favourites", virtual=True)
+                for trigger, snippet in favorites:
+                    self._add_snippet_item(parent, trigger, snippet)
             # Build groups first (sorted for stable display), then snippets.
             groups = {}
             for trigger, snippet in items:
@@ -1987,6 +2045,7 @@ class TexterUI(QMainWindow):
                     self._add_snippet_item(parent, trigger, snippet)
 
         self.snippet_list.expandAll()
+        self._apply_group_counts()
 
         if selected_before:
             item = self.snippet_list.find_item(selected_before)
@@ -2080,11 +2139,13 @@ class TexterUI(QMainWindow):
         self.subgroup_combo.setEnabled(self.group_combo.currentData() != "none")
         self.refresh_snippet_list()
 
-    def _ensure_group(self, parent, name):
+    def _ensure_group(self, parent, name, virtual=False):
         """Find or create a (non-selectable) group node named `name`.
 
         `parent` may be the tree widget itself (root level) or another group
-        item (nested folders).
+        item (nested folders). Virtual sections (Recent/Favourites) are
+        marked in UserRole + 2 so drag-and-drop never treats them as a
+        category to move a snippet into.
         """
         if isinstance(parent, QTreeWidget):
             count = parent.topLevelItemCount()
@@ -2098,6 +2159,8 @@ class TexterUI(QMainWindow):
                 return child
         item = QTreeWidgetItem(parent, [name])
         item.setData(0, Qt.UserRole + 1, name)
+        if virtual:
+            item.setData(0, Qt.UserRole + 2, True)
         item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
         # Bold orange headers (Daily Alvaro briefing) so groups stand out.
         item.setForeground(0, QColor("#ff9a3c"))
@@ -2105,6 +2168,35 @@ class TexterUI(QMainWindow):
         group_font.setBold(True)
         item.setFont(0, group_font)
         return item
+
+    def _count_snippet_leaves(self, item):
+        """Snippet rows under a group, counting nested groups too."""
+        total = 0
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child.data(0, Qt.UserRole + 1) is not None:
+                total += self._count_snippet_leaves(child)
+            else:
+                total += 1
+        return total
+
+    def _apply_group_counts(self):
+        """Rewrite every group header as 'Name (n snippets)'.
+
+        The name itself stays in UserRole + 1, so group lookup (which
+        compares that data, not the text) is unaffected, and a rebuild
+        starts from the plain name again.
+        """
+        def walk(parent):
+            count = parent.topLevelItemCount() if isinstance(parent, QTreeWidget) else parent.childCount()
+            get = parent.topLevelItem if isinstance(parent, QTreeWidget) else parent.child
+            for i in range(count):
+                child = get(i)
+                name = child.data(0, Qt.UserRole + 1)
+                if name is not None:
+                    child.setText(0, f"{name} ({self._count_snippet_leaves(child)})")
+                    walk(child)
+        walk(self.snippet_list)
 
     # Light Catppuccin Mocha accents, readable on the dark background.
     TYPE_COLORS = {
@@ -2115,7 +2207,12 @@ class TexterUI(QMainWindow):
     DISABLED_COLOR = "#9a9aa5"  # briefing muted for disabled snippets
 
     def _add_snippet_item(self, parent, trigger, snippet):
-        item = QTreeWidgetItem(parent, [trigger])
+        # Snippets have no display name, only a trigger, so the row reads
+        # ";sig • used 42x" (or "• never used"), with a star for favourites.
+        usage = int(snippet.get("usage", 0))
+        usage_text = f"used {usage}x" if usage else "never used"
+        star = "\u2605 " if snippet.get("favorite") else ""
+        item = QTreeWidgetItem(parent, [f"{star}{trigger} \u2022 {usage_text}"])
         item.setData(0, Qt.UserRole, trigger)
         snippet_type = snippet.get("type", "variable")
         category = snippet.get("category", "uncategorized")
@@ -2124,7 +2221,8 @@ class TexterUI(QMainWindow):
             0, QColor(self.DISABLED_COLOR if not enabled else self.TYPE_COLORS.get(snippet_type, "#d6d6de"))
         )
         state = " | DISABLED" if not enabled else ""
-        item.setToolTip(0, f"{snippet_type.capitalize()} | Category: {category}{state}")
+        fav = " | Favourite" if snippet.get("favorite") else ""
+        item.setToolTip(0, f"{snippet_type.capitalize()} | Category: {category}{state}{fav}")
         return item
 
     def on_category_changed(self, category):
@@ -2134,14 +2232,59 @@ class TexterUI(QMainWindow):
         self.refresh_snippet_list()
         print(f"UI: Showing {category} snippets")
 
+    def _clear_preview(self):
+        """Empty the structured preview and disable its buttons."""
+        if not hasattr(self, "preview_detail_labels"):
+            # Called before the preview area is built (e.g. an early
+            # refresh during setup): only the text widget may exist.
+            if hasattr(self, "preview_text"):
+                self.preview_text.clear()
+            return
+        for label in self.preview_detail_labels.values():
+            label.setText("\u2014")
+        self.preview_used_label.setText("Select a snippet to preview")
+        self.preview_text.clear()
+        self.preview_copy_btn.setEnabled(False)
+        self.preview_insert_btn.setEnabled(False)
+
+    def copy_preview(self):
+        """Copy the rendered expansion shown in the preview pane."""
+        text = self.preview_text.toPlainText()
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        self.statusBar().showMessage("Copied expansion to clipboard", 3000)
+
+    def insert_preview(self):
+        """Hide the manager and insert the previewed expansion.
+
+        Reuses the picker's insert path (manager-owned timer + daemon
+        insert), so the app that takes focus after the manager hides
+        receives the text. Focus behaviour is therefore the same caveat
+        as the picker: on X11 with xdotool the picker restores a captured
+        window, but here there is no captured target, so the window
+        manager decides which app takes focus.
+        """
+        trigger = self.selected_trigger()
+        if not trigger or not self.daemon:
+            return
+        snippet = self.daemon.snippets.get(trigger)
+        if not snippet or not snippet.get("enabled", True):
+            return
+        text = self.get_expansion_preview(snippet)
+        if not text:
+            return
+        self.hide_window()
+        self._schedule_picker_insert(trigger, text, 300)
+
     def on_selection_changed(self):
         trigger = self.selected_trigger()
         if not trigger or not self.daemon:
-            self.preview_text.clear()
+            self._clear_preview()
             return
         snippet = self.daemon.snippets.get(trigger)
         if not snippet:
-            self.preview_text.clear()
+            self._clear_preview()
             return
 
         preview = self.get_expansion_preview(snippet)
@@ -2150,13 +2293,19 @@ class TexterUI(QMainWindow):
         tags = snippet.get("tags") or []
         used = int(snippet.get("usage", 0))
         last_used = snippet.get("last_used", "never")
-        disabled_note = "\n\n*** DISABLED - this snippet will not expand ***" if not snippet.get("enabled", True) else ""
+        enabled = snippet.get("enabled", True)
 
-        self.preview_text.setText(
-            f"Category: {snippet_category}\nTags: {', '.join(tags) if tags else 'none'}\n"
-            f"Type: {snippet_type}\nTrigger: {trigger}\n"
-            f"Used: {used} times (last: {last_used})\n\nExpands to:\n{preview}{disabled_note}"
+        self.preview_detail_labels["category"].setText(snippet_category)
+        self.preview_detail_labels["tags"].setText(", ".join(tags) if tags else "none")
+        self.preview_detail_labels["type"].setText(snippet_type)
+        self.preview_detail_labels["trigger"].setText(trigger)
+        disabled_note = " \u2014 DISABLED, will not expand" if not enabled else ""
+        self.preview_used_label.setText(
+            f"Used {used} times (last: {last_used}){disabled_note}"
         )
+        self.preview_text.setText(preview)
+        self.preview_copy_btn.setEnabled(bool(preview))
+        self.preview_insert_btn.setEnabled(bool(preview) and enabled)
 
     def on_language_changed(self, lang):
         self.refresh_snippet_list()
@@ -2290,6 +2439,24 @@ class TexterUI(QMainWindow):
         self.daemon.add_or_update_snippet(trigger, snippet)
         self.refresh_snippet_list()
         state = "Disabled" if not snippet["enabled"] else "Enabled"
+        print(f"UI: {state} snippet '{trigger}' (saved)")
+
+    def toggle_snippet_favorite(self):
+        """Flip the favourite flag of the selected snippet and persist it.
+
+        Favourites appear in the tree's Favourites section; the flag is
+        stored on the snippet dict itself, so it survives restarts and
+        is carried by exports (usage/last_used are stripped by packs,
+        but favourite is not usage data).
+        """
+        trigger = self.selected_trigger()
+        if not trigger or not self.daemon:
+            return
+        snippet = dict(self.daemon.snippets.get(trigger, {}))
+        snippet["favorite"] = not snippet.get("favorite", False)
+        self.daemon.add_or_update_snippet(trigger, snippet)
+        self.refresh_snippet_list()
+        state = "Favourited" if snippet["favorite"] else "Unfavourited"
         print(f"UI: {state} snippet '{trigger}' (saved)")
 
     def delete_snippet(self):
