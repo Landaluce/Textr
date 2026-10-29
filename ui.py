@@ -389,7 +389,6 @@ class TexterUI(QMainWindow):
         {"name", "email", "date", "time", "iso", "week", "clipboard"}
     )
 
-
     def add_user_setting_row(self, key="", value=""):
         row = self.user_settings_table.rowCount()
         self.user_settings_table.insertRow(row)
