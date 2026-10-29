@@ -65,6 +65,10 @@ class Daemon:
         self.prompt_handler = None
         self._prompt_event = None
         self._prompt_result = None
+        # Window id active when the picker hotkey / a prompt started, so
+        # insertion can be aimed back at it after a Textr dialog closes.
+        self._picker_target_window = None
+        self._prompt_target_window = None
         # Backups and trash live next to snippets.json.
         _data_dir = os.path.dirname(self.snippets_file) or "."
         self.backup_dir = os.path.join(_data_dir, "backups")
@@ -528,6 +532,40 @@ class Daemon:
             r"\{([A-Za-z_][A-Za-z0-9_]*)([+-]\d+)?\}", replace_var, text
         )
 
+    def _capture_active_window(self):
+        """X11 window id active right now, or None.
+
+        Must be called BEFORE any Textr dialog opens: once the picker
+        or prompt dialog appears, the active window is Textr's, not the
+        target application's. xdotool is optional; without it, focus
+        restore falls back to lowering the manager + a delay (see UI).
+        Wayland has no xdotool active-window concept, so this is None.
+        """
+        try:
+            if self.wayland:
+                return None
+            result = subprocess.run(
+                ["xdotool", "getactivewindow"],
+                capture_output=True, text=True, timeout=2,
+            )
+            wid = result.stdout.strip()
+            return wid if wid.isdigit() else None
+        except Exception:
+            return None
+
+    def _restore_active_window(self, wid):
+        """Activate window `wid` (xdotool); True on success, else False."""
+        if not wid:
+            return False
+        try:
+            subprocess.run(
+                ["xdotool", "windowactivate", "--sync", wid],
+                capture_output=True, timeout=3,
+            )
+            return True
+        except Exception:
+            return False
+
     def render_with_prompt(self, text):
         """Render `text`, prompting for missing values when a UI is attached.
 
@@ -539,6 +577,8 @@ class Daemon:
         missing = self.missing_placeholders(text)
         if not missing or not self.prompt_handler:
             return self.render_template(text)
+        # Capture the target window BEFORE the prompt dialog opens.
+        self._prompt_target_window = self._capture_active_window()
         try:
             values = self.prompt_handler(missing)
         except Exception as e:
@@ -1138,8 +1178,11 @@ class Daemon:
             self.replace("", text)
 
     def show_picker_via_hotkey(self):
-        """Global Ctrl+Shift+I: open the quick-insert picker."""
+        """Global Ctrl+Alt+Space: open the quick-insert picker."""
         print("Global hotkey triggered: showing quick-insert picker")
+        # Capture BEFORE the picker dialog opens, or the active window
+        # recorded would be Textr's own dialog.
+        self._picker_target_window = self._capture_active_window()
         if hasattr(self, "ui") and self.ui:
             self.ui.daemon_command.emit("picker")
 
@@ -1200,13 +1243,13 @@ class Daemon:
             self.hotkey_listener = keyboard.GlobalHotKeys({
                 '<ctrl>+<shift>+p': self.toggle_pause_via_hotkey,
                 '<ctrl>+<shift>+<space>': self.show_window_via_hotkey,
-                '<ctrl>+<shift>+i': self.show_picker_via_hotkey,
+                '<ctrl>+<alt>+<space>': self.show_picker_via_hotkey,
             })
             self.hotkey_listener.daemon = True
             self.hotkey_listener.start()
             print("Global hotkeys registered: Ctrl+Shift+P to toggle pause/resume, "
                   "Ctrl+Shift+Space to show the manager, "
-                  "Ctrl+Shift+I for the quick-insert picker")
+                  "Ctrl+Alt+Space for the quick-insert picker")
         except Exception as e:
             print("Failed to register global hotkeys listener:", e)
 

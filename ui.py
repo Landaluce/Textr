@@ -329,7 +329,7 @@ class PromptValuesDialog(QDialog):
         super().__init__(None)
         self.setWindowTitle("Fill in snippet values")
         self.setWindowFlags(
-            self.windowFlags() | Qt.WindowStaysOnTopHint
+            self.windowFlags() | Qt.WindowStaysOnTopHint | Qt.Tool
         )
         self._edits = {}
         layout = QVBoxLayout(self)
@@ -377,20 +377,21 @@ def _fuzzy_score(trigger, expansion, query):
 
 
 class QuickInsertDialog(QDialog):
-    """Fuzzy snippet picker, opened anywhere via Ctrl+Shift+I.
+    """Fuzzy snippet picker, opened anywhere via Ctrl+Alt+Space.
 
     Standalone and stays-on-top so closing it returns focus to the
     application the user was in. Only variable/template snippets are
     listed (commands act on the manager, they do not insert text).
     """
 
-    def __init__(self, daemon, ui):
+    def __init__(self, daemon, ui, target_window=None):
         super().__init__(None)
         self.daemon = daemon
         self.ui = ui
+        self.target_window = target_window
         self.setWindowTitle("Quick Insert")
         self.setWindowFlags(
-            self.windowFlags() | Qt.WindowStaysOnTopHint
+            self.windowFlags() | Qt.WindowStaysOnTopHint | Qt.Tool
         )
         self.resize(520, 380)
         layout = QVBoxLayout(self)
@@ -483,10 +484,19 @@ class QuickInsertDialog(QDialog):
                 return
         final = self.daemon.render_template(raw, prompt_values=values)
         self.hide()
-        # Let focus return to the application the user was in before
-        # inserting; the daemon worker then pastes/types there.
+        # Aim insertion back at the window that was active when the
+        # hotkey was pressed. Qt alone cannot do this: closing a Textr
+        # dialog reactivates Textr's own manager window, so without an
+        # explicit restore the paste lands in the manager (the window
+        # behind the picker) instead of the target app. xdotool restore
+        # is exact when available; otherwise the lowered manager + a
+        # longer delay is the fallback.
+        restored = False
+        if self.target_window and self.daemon:
+            restored = self.daemon._restore_active_window(self.target_window)
+        delay = 500 if restored else 400
         QTimer.singleShot(
-            250, lambda: self.ui._insert_picker_selection(trigger, final)
+            delay, lambda: self.ui._insert_picker_selection(trigger, final)
         )
         self.accept()
 
@@ -853,7 +863,9 @@ class TexterUI(QMainWindow):
         if action in ("ui", "top"):
             self.bring_to_front()
         elif action == "picker":
-            self.show_picker()
+            self.show_picker(
+                getattr(self.daemon, "_picker_target_window", None)
+            )
         elif action == "hide":
             self.hide_window()
         elif action == "refresh":
@@ -1105,6 +1117,12 @@ class TexterUI(QMainWindow):
         return self._prompt_result
 
     def _handle_prompt_request(self, missing):
+        # Lower the manager so it does not steal focus back when the
+        # prompt dialog closes; xdotool restore below is the exact fix.
+        try:
+            self.lower()
+        except Exception:
+            pass
         dialog = PromptValuesDialog(missing)
         if dialog.exec() == QDialog.Accepted:
             values = dialog.values()
@@ -1113,6 +1131,12 @@ class TexterUI(QMainWindow):
             self._prompt_result = values
         else:
             self._prompt_result = None
+        # Restore the target window BEFORE waking the expansion worker,
+        # or the worker's paste lands in the manager window.
+        if self.daemon:
+            self.daemon._restore_active_window(
+                getattr(self.daemon, "_prompt_target_window", None)
+            )
         if getattr(self, "_prompt_event", None) is not None:
             self._prompt_event.set()
 
@@ -1160,10 +1184,17 @@ class TexterUI(QMainWindow):
             self.refresh_user_setting_usage()
 
     # ---- Quick picker ----------------------------------------------------
-    def show_picker(self):
+    def show_picker(self, target_window=None):
         if not self.daemon:
             return
-        QuickInsertDialog(self.daemon, self).exec()
+        # Lower the manager before the picker opens: after the picker
+        # closes, the window on top should be the target app, not the
+        # manager (which Qt would otherwise reactivate).
+        try:
+            self.lower()
+        except Exception:
+            pass
+        QuickInsertDialog(self.daemon, self, target_window).exec()
 
     def _insert_picker_selection(self, trigger, text):
         if self.daemon:
@@ -1573,7 +1604,7 @@ class TexterUI(QMainWindow):
         right_layout.addLayout(action_layout)
 
         pack_layout = QHBoxLayout()
-        self.picker_btn = QPushButton("Quick Insert (Ctrl+Shift+I)")
+        self.picker_btn = QPushButton("Quick Insert (Ctrl+Alt+Space)")
         self.picker_btn.clicked.connect(self.show_picker)
         self.backups_btn = QPushButton("Backups")
         self.backups_btn.clicked.connect(self.show_backups)
