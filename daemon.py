@@ -77,6 +77,10 @@ class Daemon:
         # Guards all access to self.snippets: the UI thread mutates it while
         # the keyboard listener iterates it on every keystroke.
         self.snippets_lock = threading.RLock()
+        # Bumped on every recorded expansion (see _record_usage). The
+        # UI polls it so Uses / Last used / group counts / health update
+        # live instead of only after a restart or a manual refresh.
+        self._usage_stamp = 0
         # Keys that invalidate the typed buffer (cursor jumps, line edits...).
         # Normalized names shared by the pynput and evdev backends.
         self.buffer_reset_names = {
@@ -230,6 +234,22 @@ class Daemon:
             self.save_config()
             return True
         return False
+
+    def load_backup_snippets(self, path):
+        """Snippet dict from a snippets backup file, without applying it.
+
+        Returns None for config backups, unreadable files, or data
+        that is not a snippet dict. Used by single-snippet restore.
+        """
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"Could not read backup: {e}")
+            return None
+        if not os.path.basename(path).startswith("snippets-"):
+            return None
+        return data if isinstance(data, dict) else None
 
     def backup_now(self):
         """Back up snippets.json and config.json immediately.
@@ -559,6 +579,31 @@ class Daemon:
         {"name", "email", "date", "time", "iso", "week", "clipboard", "cursor"}
     )
 
+    CHOICE_RE = re.compile(r"\{choice:([^}|]+(?:\|[^}|]+)+)\}")
+
+    def choice_placeholders(self, text):
+        """Choice placeholders in `text`, in order, de-duplicated.
+
+        Returns [(placeholder_text, [option, ...]), ...] where
+        placeholder_text is the full "{choice:A|B}" string (used as the
+        prompt-values key) and options are the |-separated choices.
+        A {choice:...} with fewer than two non-empty options is not
+        a choice and is left alone.
+        """
+        out = []
+        seen = set()
+        for match in self.CHOICE_RE.finditer(text or ""):
+            full = match.group(0)
+            if full in seen:
+                continue
+            options = [o.strip() for o in match.group(1).split("|")]
+            options = [o for o in options if o]
+            if len(options) < 2:
+                continue
+            seen.add(full)
+            out.append((full, options))
+        return out
+
     def missing_placeholders(self, text):
         """Placeholder names in `text` with no (non-empty) value.
 
@@ -591,6 +636,18 @@ class Daemon:
             context["clipboard"] = pyperclip.paste()
         except Exception:
             context["clipboard"] = ""
+
+        def _choice(match):
+            full = match.group(0)
+            options = [o.strip() for o in match.group(1).split("|")]
+            options = [o for o in options if o]
+            if len(options) < 2:
+                return full
+            if prompt_values and full in prompt_values:
+                return str(prompt_values[full])
+            return options[0]
+
+        text = self.CHOICE_RE.sub(_choice, text or "")
 
         def replace_var(match):
             key = match.group(1)
@@ -667,12 +724,13 @@ class Daemon:
         render_template (missing placeholders stay literal).
         """
         missing = self.missing_placeholders(text)
-        if not missing or not self.prompt_handler:
+        choices = self.choice_placeholders(text)
+        if (not missing and not choices) or not self.prompt_handler:
             return self.render_template(text)
         # Capture the target window BEFORE the prompt dialog opens.
         self._prompt_target_window = self._capture_active_window()
         try:
-            values = self.prompt_handler(missing)
+            values = self.prompt_handler({"missing": missing, "choices": choices})
         except Exception as e:
             print(f"Prompt failed: {e}")
             return self.render_template(text)
@@ -1078,6 +1136,11 @@ class Daemon:
             if isinstance(snippet, dict):
                 snippet["usage"] = int(snippet.get("usage", 0)) + 1
                 snippet["last_used"] = datetime.now().isoformat(timespec="seconds")
+                self._usage_stamp += 1
+
+    def usage_stamp(self):
+        """Monotonic counter, bumped on every recorded expansion."""
+        return getattr(self, "_usage_stamp", 0)
 
     def _expand(self, trigger):
         """Resolve and expand `trigger` if it yields text; buffer is cleared."""
