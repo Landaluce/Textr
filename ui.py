@@ -1,7 +1,10 @@
 # texter_mvp/ui.py
 import sys
+import csv
 import html
 import json
+import os
+import shutil
 import threading
 import re
 from copy import deepcopy
@@ -15,7 +18,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox,
     QRadioButton, QScrollArea, QFrame, QInputDialog
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect, QSettings
+from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect, QSettings, QEvent
 from PySide6.QtGui import (
     QIcon, QAction, QPixmap, QPainter, QColor, QPalette, QPainterPath,
     QShortcut, QKeySequence,
@@ -178,6 +181,9 @@ class SnippetTreeWidget(QTreeWidget):
         if group_path and daemon:
             snippet = daemon.snippets.get(trigger)
             if isinstance(snippet, dict):
+                window._push_undo(
+                    f"Move '{trigger}' to '{'/'.join(group_path)}'"
+                )
                 snippet["category"] = "/".join(group_path)
                 daemon.save_snippets()
                 window.refresh_snippet_list()
@@ -255,6 +261,24 @@ class AddSnippetDialog(QDialog):
         self.type_combo.currentTextChanged.connect(self.on_type_changed)
         layout.addRow("Type:", self.type_combo)
 
+        # Placeholder inserter (item 3): pick a placeholder and insert
+        # it at the cursor, instead of typing {name} by hand. Hidden
+        # for command snippets, which have no expansion text.
+        self.placeholder_row = QWidget()
+        _ph_layout = QHBoxLayout(self.placeholder_row)
+        _ph_layout.setContentsMargins(0, 0, 0, 0)
+        self.placeholder_combo = QComboBox()
+        for _name in self._placeholder_names():
+            self.placeholder_combo.addItem("{" + _name + "}", _name)
+        _ph_layout.addWidget(self.placeholder_combo)
+        self.placeholder_insert_btn = QPushButton("Insert")
+        self.placeholder_insert_btn.setToolTip(
+            "Insert the selected placeholder at the cursor in the value field"
+        )
+        self.placeholder_insert_btn.clicked.connect(self._insert_placeholder)
+        _ph_layout.addWidget(self.placeholder_insert_btn)
+        layout.addRow("Insert placeholder:", self.placeholder_row)
+
         # Value
         self.value_input = QTextEdit()
         self.value_input.setPlaceholderText("For variable: the value")
@@ -331,11 +355,85 @@ class AddSnippetDialog(QDialog):
         self.command_value_input.textChanged.connect(self._update_live_preview)
         self.type_combo.currentTextChanged.connect(self._update_live_preview)
         self._update_live_preview()
+        # "{" popup (item 3): typing "{" in a value field offers the
+        # placeholder list at the cursor. The popup is scheduled after
+        # the keystroke so the "{" itself is already in the text.
+        self.value_input.installEventFilter(self)
+        self.languages_input.installEventFilter(self)
 
     def on_type_changed(self, type_val):
         self.languages_input.setHidden(type_val != "template")
         self.action_input.setHidden(type_val != "command")
         self.command_value_input.setHidden(type_val != "command")
+        if hasattr(self, "placeholder_row"):
+            self.placeholder_row.setHidden(type_val == "command")
+
+    def eventFilter(self, watched, event):
+        """Offer the placeholder popup when "{" is typed in a value field."""
+        if (
+            watched in (getattr(self, "value_input", None), getattr(self, "languages_input", None))
+            and event.type() == QEvent.KeyPress
+            and event.text() == "{"
+        ):
+            QTimer.singleShot(0, lambda: self._show_placeholder_popup(watched))
+        return super().eventFilter(watched, event)
+
+    def _placeholder_names(self):
+        """Placeholder names for the inserter: built-ins, custom settings, offsets."""
+        names = ["name", "email", "date", "time", "iso", "week", "clipboard", "cursor"]
+        if self.daemon is not None:
+            config = getattr(self.daemon, "config", None)
+            if isinstance(config, dict):
+                names.extend(sorted((config.get("user_settings", {}) or {}).keys()))
+        names.extend(["date+7", "date-7", "iso+1", "time+2", "week+1"])
+        seen = set()
+        out = []
+        for name in names:
+            if name and name not in seen:
+                seen.add(name)
+                out.append(name)
+        return out
+
+    def _placeholder_target(self):
+        """Text field the inserter writes into for the current type."""
+        if self.type_combo.currentText() == "variable":
+            return self.value_input
+        if self.type_combo.currentText() == "template":
+            return self.languages_input
+        return None
+
+    def _insert_placeholder(self):
+        """Insert the combo's placeholder at the cursor (Insert button)."""
+        editor = self._placeholder_target()
+        if editor is None:
+            return
+        name = self.placeholder_combo.currentData()
+        if not name:
+            return
+        editor.setFocus()
+        editor.textCursor().insertText("{" + str(name) + "}")
+
+    def _insert_placeholder_name(self, editor, name):
+        """Insert {name} at the cursor, eating a just-typed "{" (popup path)."""
+        cursor = editor.textCursor()
+        pos = cursor.position()
+        if pos > 0 and editor.document().characterAt(pos - 1) == "{":
+            cursor.deletePreviousChar()
+        cursor.insertText("{" + str(name) + "}")
+        editor.setTextCursor(cursor)
+
+    def _show_placeholder_popup(self, editor):
+        """Menu of placeholders at the text cursor, after typing "{"."""
+        if editor is None or not editor.hasFocus():
+            return
+        menu = QMenu(editor)
+        for name in self._placeholder_names():
+            action = menu.addAction("{" + name + "}")
+            action.triggered.connect(
+                lambda _c, n=name: self._insert_placeholder_name(editor, n)
+            )
+        rect = editor.cursorRect()
+        menu.exec(editor.mapToGlobal(rect.bottomRight()))
 
     def _raw_expansion_text(self):
         """(raw text, json_error) for the type currently being edited."""
@@ -658,6 +756,31 @@ class QuickInsertDialog(QDialog):
             out.append((trigger, snippet, raw))
         return out
 
+    def _add_picker_item(self, trigger, snippet, raw):
+        """One picker row: star, trigger, type, preview, usage."""
+        preview = " ".join(str(raw).split())[:80]
+        usage = int(snippet.get("usage", 0) or 0)
+        usage_text = f"used {usage}x" if usage else "never used"
+        star = "\u2605 " if snippet.get("favorite") else ""
+        item = QListWidgetItem(
+            f"{star}{trigger}  [{snippet.get('type', '')}]  {preview}  \u2022 {usage_text}"
+        )
+        item.setData(Qt.UserRole, trigger)
+        self.list_widget.addItem(item)
+        return item
+
+    def _add_picker_header(self, title):
+        """Non-selectable section header (Recent / Favourites / All)."""
+        item = QListWidgetItem(title)
+        item.setData(Qt.UserRole, None)
+        item.setFlags(Qt.ItemIsEnabled)
+        header_font = item.font()
+        header_font.setBold(True)
+        item.setFont(header_font)
+        item.setForeground(QColor("#ff9a3c"))
+        self.list_widget.addItem(item)
+        return item
+
     def _refresh_list(self):
         query = self.search.text().strip().lower()
         scored = []
@@ -669,19 +792,65 @@ class QuickInsertDialog(QDialog):
             scored.append((-score, -usage, trigger, snippet, raw))
         scored.sort(key=lambda r: (r[0], r[1], r[2]))
         self.list_widget.clear()
-        for _neg_score, _neg_usage, trigger, snippet, raw in scored:
-            preview = " ".join(str(raw).split())[:80]
-            item = QListWidgetItem(
-                f"{trigger}  [{snippet.get('type', '')}]  {preview}"
+        if not query:
+            # Smarter picker (item 6): with no query, Recent (3 most
+            # recently used) and Favourites come first as sections,
+            # mirroring the tree view, then the rest by usage.
+            by_trigger = {t: (sn, raw) for _s, _u, t, sn, raw in scored}
+            recent = [
+                (t, sn) for t, (sn, _raw) in by_trigger.items()
+                if (sn.get("last_used") or "never") != "never"
+            ]
+            recent.sort(
+                key=lambda kv: (kv[1].get("last_used") or "", kv[0].lower()),
+                reverse=True,
             )
-            item.setData(Qt.UserRole, trigger)
-            self.list_widget.addItem(item)
-        if self.list_widget.count():
-            self.list_widget.setCurrentRow(0)
-            self.list_widget.item(0).setSelected(True)
+            recent = recent[:3]
+            recent_triggers = {t for t, _sn in recent}
+            favorites = [
+                (t, sn) for t, (sn, _raw) in by_trigger.items()
+                if sn.get("favorite") and t not in recent_triggers
+            ]
+            favorites.sort(key=lambda kv: (-int(kv[1].get("usage", 0) or 0), kv[0].lower()))
+            favorite_triggers = {t for t, _sn in favorites}
+            rest = [
+                (t, sn) for t, (sn, _raw) in by_trigger.items()
+                if t not in recent_triggers and t not in favorite_triggers
+            ]
+            rest.sort(key=lambda kv: (-int(kv[1].get("usage", 0) or 0), kv[0].lower()))
+            for title, group in (
+                ("Recent", recent),
+                ("Favourites", favorites),
+                ("All snippets", rest),
+            ):
+                if not group:
+                    continue
+                self._add_picker_header(title)
+                for trigger, snippet in group:
+                    self._add_picker_item(trigger, snippet, by_trigger[trigger][1])
+        else:
+            for _neg_score, _neg_usage, trigger, snippet, raw in scored:
+                self._add_picker_item(trigger, snippet, raw)
+        # Select the first real snippet row, never a section header.
+        for row in range(self.list_widget.count()):
+            item = self.list_widget.item(row)
+            if item is not None and item.data(Qt.UserRole) is not None:
+                self.list_widget.setCurrentRow(row)
+                item.setSelected(True)
+                break
 
     def _on_accept(self):
         item = self.list_widget.currentItem()
+        if item is not None and item.data(Qt.UserRole) is None:
+            # A section header was current (e.g. clicked): move to the
+            # first snippet row at or after it, so headers never insert.
+            item = None
+            start = self.list_widget.currentRow()
+            for row in range(start, self.list_widget.count()):
+                candidate = self.list_widget.item(row)
+                if candidate is not None and candidate.data(Qt.UserRole) is not None:
+                    item = candidate
+                    break
         if item is None:
             selected = self.list_widget.selectedItems()
             item = selected[0] if selected else None
@@ -689,8 +858,12 @@ class QuickInsertDialog(QDialog):
             # OK pressed with no selection (e.g. selection cleared by
             # clicking empty list space): insert the top result instead
             # of silently doing nothing. Double-click never hits this
-            # because it always carries its own item.
-            item = self.list_widget.item(0)
+            # because it always carries its own item. Skip headers.
+            for row in range(self.list_widget.count()):
+                candidate = self.list_widget.item(row)
+                if candidate is not None and candidate.data(Qt.UserRole) is not None:
+                    item = candidate
+                    break
         if item is None:
             return
         trigger = item.data(Qt.UserRole)
@@ -1037,6 +1210,117 @@ class CleanupDialog(QDialog):
         self._refresh()
 
 
+class CategoryTagDialog(QDialog):
+    """Rename/delete categories and tags across the whole library (item 4)."""
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.window = window
+        self.daemon = window.daemon
+        self.setWindowTitle("Manage categories & tags")
+        self.setMinimumWidth(460)
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Categories"))
+        self.category_list = QListWidget()
+        layout.addWidget(self.category_list)
+        cat_btns = QHBoxLayout()
+        self.rename_cat_btn = QPushButton("Rename category")
+        self.rename_cat_btn.clicked.connect(self._rename_category)
+        self.delete_cat_btn = QPushButton("Delete category")
+        self.delete_cat_btn.clicked.connect(self._delete_category)
+        cat_btns.addWidget(self.rename_cat_btn)
+        cat_btns.addWidget(self.delete_cat_btn)
+        layout.addLayout(cat_btns)
+
+        layout.addWidget(QLabel("Tags"))
+        self.tag_list = QListWidget()
+        layout.addWidget(self.tag_list)
+        tag_btns = QHBoxLayout()
+        self.rename_tag_btn = QPushButton("Rename tag")
+        self.rename_tag_btn.clicked.connect(self._rename_tag)
+        self.delete_tag_btn = QPushButton("Delete tag")
+        self.delete_tag_btn.clicked.connect(self._delete_tag)
+        tag_btns.addWidget(self.rename_tag_btn)
+        tag_btns.addWidget(self.delete_tag_btn)
+        layout.addLayout(tag_btns)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+        self._refresh_lists()
+
+    def _refresh_lists(self):
+        self.category_list.clear()
+        for category, count in self.window.category_counts():
+            item = QListWidgetItem(f"{category} ({count})")
+            item.setData(Qt.UserRole, category)
+            self.category_list.addItem(item)
+        self.tag_list.clear()
+        for tag, count in self.window.tag_counts():
+            item = QListWidgetItem(f"{tag} ({count})")
+            item.setData(Qt.UserRole, tag)
+            self.tag_list.addItem(item)
+
+    def _selected(self, list_widget):
+        item = list_widget.currentItem()
+        return item.data(Qt.UserRole) if item is not None else None
+
+    def _after_change(self):
+        self._refresh_lists()
+        self.window.refresh_snippet_list()
+
+    def _rename_category(self):
+        old = self._selected(self.category_list)
+        if not old:
+            return
+        new, ok = QInputDialog.getText(
+            self, "Rename category", "New name:", QLineEdit.Normal, old
+        )
+        if ok and new.strip() and new.strip() != old:
+            self.window.rename_category(old, new.strip())
+            self._after_change()
+
+    def _delete_category(self):
+        old = self._selected(self.category_list)
+        if not old:
+            return
+        count = dict(self.window.category_counts()).get(old, 0)
+        reply = QMessageBox.question(
+            self, "Delete category",
+            f"Move {count} snippet(s) from '{old}' to 'uncategorized'?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.window.delete_category(old)
+            self._after_change()
+
+    def _rename_tag(self):
+        old = self._selected(self.tag_list)
+        if not old:
+            return
+        new, ok = QInputDialog.getText(
+            self, "Rename tag", "New name:", QLineEdit.Normal, old
+        )
+        if ok and new.strip() and new.strip() != old:
+            self.window.rename_tag(old, new.strip())
+            self._after_change()
+
+    def _delete_tag(self):
+        old = self._selected(self.tag_list)
+        if not old:
+            return
+        count = dict(self.window.tag_counts()).get(old, 0)
+        reply = QMessageBox.question(
+            self, "Delete tag",
+            f"Remove the tag '{old}' from {count} snippet(s)?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.window.delete_tag(old)
+            self._after_change()
+
+
 class TexterUI(QMainWindow):
     quit_requested = Signal()
     prompt_requested = Signal(object)
@@ -1058,6 +1342,10 @@ class TexterUI(QMainWindow):
         self._preview_rendered_text = ""
         self._settings_baseline = None
         self._app_settings = QSettings("Landaluce", "Textr")
+        # Undo stack (item 1): (label, snippets snapshot, trash triggers).
+        self._undo_stack = []
+        # Last search/filter result, for CSV export of visible rows.
+        self._last_filtered_items = []
         self.quit_requested.connect(self.quit_app)
         self.daemon_command.connect(self.handle_daemon_command, Qt.QueuedConnection)
         self.prompt_requested.connect(self._handle_prompt_request, Qt.QueuedConnection)
@@ -1130,7 +1418,7 @@ class TexterUI(QMainWindow):
         QApplication.quit()
 
     def closeEvent(self, event):
-        # Persist window state (item 1) on every close, including the
+        # Persist window state on every close, including the
         # quit_app() path, which re-enters here with really_quit set.
         try:
             self._save_window_state()
@@ -1138,8 +1426,20 @@ class TexterUI(QMainWindow):
             pass
         if hasattr(self, 'really_quit') and self.really_quit:
             event.accept()
-        else:
-            self.quit_app()
+            return
+        # Close-to-tray (item 2): when configured, closing hides the
+        # manager instead of quitting; the daemon keeps running and the
+        # tray menu's Show Manager brings it back.
+        if self.daemon and self.daemon.config.get("close_behavior") == "tray":
+            event.ignore()
+            self.hide_window()
+            if hasattr(self, "tray_icon"):
+                self.tray_icon.showMessage(
+                    "Textr", "Textr is still running in the tray.",
+                    QSystemTrayIcon.MessageIcon.Information, 3000,
+                )
+            return
+        self.quit_app()
 
     SETTING_PLACEHOLDER_RE = re.compile(
         r"(?<![\{$])\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})"
@@ -1593,6 +1893,7 @@ class TexterUI(QMainWindow):
                     if isinstance(sn, dict) else sn)
                 for t, sn in to_import.items()
             }
+            self._push_undo(f"Import pack ({len(to_import)} snippet(s))")
             self.daemon.import_snippets(to_import)
             self.refresh_snippet_list()
             self.find_missing_user_settings(notify=False)
@@ -1616,6 +1917,8 @@ class TexterUI(QMainWindow):
             "email": self.email_edit.text().strip(),
             "layout": self.layout_combo.currentData(),
             "paste_hotkey": self.paste_hotkey_edit.text().strip() or "ctrl+shift+v",
+            "picker_hotkey": self.picker_hotkey_edit.text().strip().lower() or "ctrl+alt+space",
+            "close_behavior": self.close_behavior_combo.currentData(),
             "date_format": self.date_format_edit.text().strip() or "%Y-%m-%d",
             "time_format": self.time_format_edit.text().strip() or "%H:%M",
             "user_settings": custom_settings,
@@ -1633,6 +1936,20 @@ class TexterUI(QMainWindow):
         self.statusBar().showMessage("Settings saved", 3000)
         self._settings_baseline = self._settings_snapshot()
         self._update_settings_dirty()
+        # Apply the picker shortcut without restarting (item 2). When
+        # the daemon cannot re-register (old daemon, or a Wayland evdev
+        # session), the saved combo still takes effect on next start.
+        self._sync_picker_button_label()
+        restart = getattr(self.daemon, "restart_hotkey_listener", None)
+        if callable(restart):
+            if restart():
+                self.statusBar().showMessage(
+                    "Settings saved — Quick Insert shortcut updated", 3000
+                )
+            else:
+                self.statusBar().showMessage(
+                    "Settings saved — shortcut applies on next start (X11 only)", 4000
+                )
 
     def poll_daemon_status(self):
         if not self.daemon:
@@ -1671,6 +1988,10 @@ class TexterUI(QMainWindow):
         self.category_combo.addItems(["all"])  # Will be populated in refresh_snippet_list
         self.category_combo.currentTextChanged.connect(self.on_category_changed)
         cat_layout.addWidget(self.category_combo)
+        self.manage_categories_btn = QPushButton("Manage\u2026")
+        self.manage_categories_btn.setToolTip("Rename or delete categories and tags")
+        self.manage_categories_btn.clicked.connect(self.show_manage_categories)
+        cat_layout.addWidget(self.manage_categories_btn)
         left_layout.addLayout(cat_layout)
 
         # Search box
@@ -1786,6 +2107,11 @@ class TexterUI(QMainWindow):
         table_header.setSortIndicator(-1, Qt.AscendingOrder)
         self.snippet_table.itemSelectionChanged.connect(self.on_selection_changed)
         self.snippet_table.itemDoubleClicked.connect(lambda *args: self.edit_snippet())
+        # Column control (item 7): right-click the header to show/hide
+        # columns; double-click a header boundary to fit its contents.
+        table_header.setContextMenuPolicy(Qt.CustomContextMenu)
+        table_header.customContextMenuRequested.connect(self._show_table_header_menu)
+        table_header.sectionDoubleClicked.connect(self._fit_table_column)
         left_layout.addWidget(self.snippet_table)
         self.empty_state_label = QLabel("")
         self.empty_state_label.setWordWrap(True)
@@ -1875,6 +2201,13 @@ class TexterUI(QMainWindow):
             _sc = QShortcut(QKeySequence(_seq), self)
             _sc.setContext(Qt.WindowShortcut)
             _sc.activated.connect(lambda v=_view: self._set_view(v))
+        # Undo (item 1) is scoped to the snippet views, like Edit/Delete:
+        # a window-wide Ctrl+Z would steal text-field undo in the search
+        # box, settings fields, and dialogs.
+        for _widget in (self.snippet_list, self.snippet_table):
+            _undo_sc = QShortcut(QKeySequence("Ctrl+Z"), _widget)
+            _undo_sc.setContext(Qt.WidgetWithChildrenShortcut)
+            _undo_sc.activated.connect(self.undo_last)
 
         main_layout.addWidget(left_group, 1)
 
@@ -1990,6 +2323,33 @@ class TexterUI(QMainWindow):
         settings_layout.addRow("Paste shortcut:", self.paste_hotkey_edit)
         settings_layout.addRow("Date format:", self.date_format_edit)
         settings_layout.addRow("Time format:", self.time_format_edit)
+        self.picker_hotkey_edit = QLineEdit(
+            self.daemon.config.get("picker_hotkey", "ctrl+alt+space")
+            if (self.daemon and hasattr(self.daemon, "config")) else "ctrl+alt+space"
+        )
+        self.picker_hotkey_edit.setPlaceholderText("ctrl+alt+space")
+        self.picker_hotkey_edit.setToolTip(
+            "Global shortcut for Quick Insert. Applies when you click Save "
+            "Settings (X11/pynput only; also takes effect on next start)."
+        )
+        settings_layout.addRow("Quick Insert shortcut:", self.picker_hotkey_edit)
+        self.close_behavior_combo = QComboBox()
+        self.close_behavior_combo.addItem("Quit Textr", "quit")
+        self.close_behavior_combo.addItem("Minimize to tray", "tray")
+        _close_idx = self.close_behavior_combo.findData(
+            self.daemon.config.get("close_behavior", "quit")
+            if (self.daemon and hasattr(self.daemon, "config")) else "quit"
+        )
+        self.close_behavior_combo.setCurrentIndex(max(_close_idx, 0))
+        settings_layout.addRow("Close window:", self.close_behavior_combo)
+        self.autostart_check = QCheckBox("Start Textr when I log in (Linux)")
+        self.autostart_check.blockSignals(True)
+        self.autostart_check.setChecked(self._autostart_enabled())
+        self.autostart_check.blockSignals(False)
+        self.autostart_check.toggled.connect(self._on_autostart_toggled)
+        settings_layout.addRow(self.autostart_check)
+        self.picker_hotkey_edit.textChanged.connect(self._update_settings_dirty)
+        self.close_behavior_combo.currentIndexChanged.connect(self._update_settings_dirty)
         self.user_settings_table = QTableWidget(0, 3)
         self.user_settings_table.setHorizontalHeaderLabels(
             ["Setting", "Value", "Used by"]
@@ -2067,6 +2427,17 @@ class TexterUI(QMainWindow):
         self._sync_toggle_text()
         self.statusBar().addPermanentWidget(self.toggle_daemon_btn)
         self.statusBar().addPermanentWidget(self.toggle_writing_btn)
+        # Library health (item 5) and Undo (item 1) live in the status
+        # bar, always visible without opening a dialog.
+        self.health_label = QLabel("")
+        self.health_label.setToolTip("Library totals and the last backup time")
+        self.statusBar().addPermanentWidget(self.health_label)
+        self.undo_btn = QPushButton("Undo")
+        self.undo_btn.setToolTip("Nothing to undo")
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self.undo_last)
+        self.statusBar().addPermanentWidget(self.undo_btn)
+        self._sync_undo_button()
 
         # Primary action row: Quick Insert only.
         primary_layout = QHBoxLayout()
@@ -2084,6 +2455,9 @@ class TexterUI(QMainWindow):
         self.library_menu.addSeparator()
         self.library_menu.addAction("Import Pack", self.import_pack)
         self.library_menu.addAction("Export Pack", self.export_pack)
+        self.library_menu.addSeparator()
+        self.library_menu.addAction("Backup now", self.backup_now)
+        self.library_menu.addAction("Export visible to CSV", self.export_visible_csv)
         self.library_btn = QPushButton("Library")
         self.library_btn.setMenu(self.library_menu)
         library_layout.addWidget(self.library_btn)
@@ -2146,6 +2520,7 @@ class TexterUI(QMainWindow):
         self.find_missing_user_settings(notify=False)
         self._settings_baseline = self._settings_snapshot()
         self._update_settings_dirty()
+        self._sync_picker_button_label()
 
     def get_expansion_preview(self, snippet):
         if not self.daemon:
@@ -2198,6 +2573,131 @@ class TexterUI(QMainWindow):
 
     # ----- UI improvements: window state, filters, bulk, preview, shortcuts -----
 
+    # ----- Undo (item 1) -----
+
+    def _push_undo(self, label, trash_triggers=()):
+        """Snapshot the snippet library before a mutation, for undo.
+
+        The snapshot is a deep copy taken before the change, so undo
+        restores exactly the pre-change library. `trash_triggers` names
+        snippets a delete is about to move to Trash, so undo can also
+        remove them from Trash (otherwise a restored snippet would sit
+        in both places). The stack is capped at 20 entries.
+        """
+        if not self.daemon:
+            return
+        with self.daemon.snippets_lock:
+            snapshot = deepcopy(dict(self.daemon.snippets))
+        self._undo_stack.append((label, snapshot, list(trash_triggers)))
+        del self._undo_stack[:-20]
+        self._sync_undo_button()
+
+    def _sync_undo_button(self):
+        """Enable/disable the status-bar Undo button for the stack state."""
+        if not hasattr(self, "undo_btn"):
+            return
+        self.undo_btn.setEnabled(bool(self._undo_stack))
+        if self._undo_stack:
+            self.undo_btn.setToolTip(f"Undo: {self._undo_stack[-1][0]} (Ctrl+Z in the list)")
+        else:
+            self.undo_btn.setToolTip("Nothing to undo")
+
+    def undo_last(self):
+        """Restore the most recent pre-change snapshot (Ctrl+Z / Undo)."""
+        if not self._undo_stack or not self.daemon:
+            return
+        label, snapshot, trash_triggers = self._undo_stack.pop()
+        with self.daemon.snippets_lock:
+            self.daemon.snippets.clear()
+            self.daemon.snippets.update(deepcopy(snapshot))
+        self.daemon.save_snippets()
+        for trigger in trash_triggers:
+            if hasattr(self.daemon, "delete_trash_forever"):
+                try:
+                    self.daemon.delete_trash_forever(trigger)
+                except Exception:
+                    pass
+        self.refresh_snippet_list()
+        self._sync_undo_button()
+        self.statusBar().showMessage(f"Undid: {label}", 3000)
+        print(f"UI: Undid '{label}'")
+
+    # ----- Autostart (item 2, Linux) -----
+
+    def _autostart_file(self):
+        """Path of the XDG autostart entry for Textr, or None."""
+        autostart_dir = os.path.join(
+            os.path.expanduser("~"), ".config", "autostart"
+        )
+        return os.path.join(autostart_dir, "textr.desktop")
+
+    def _autostart_exec(self):
+        """Command that launches this Textr the way it was started."""
+        if getattr(sys, "frozen", False):
+            return sys.executable
+        argv0 = sys.argv[0] if sys.argv else ""
+        if argv0 and not argv0.endswith(".py"):
+            return argv0
+        if argv0.endswith(".py"):
+            return f"{sys.executable} {os.path.abspath(argv0)}"
+        found = shutil.which("textr")
+        return found or "textr"
+
+    def _autostart_enabled(self):
+        return os.path.exists(self._autostart_file())
+
+    def _set_autostart(self, enabled):
+        """Create/remove the autostart entry. Returns True on success."""
+        path = self._autostart_file()
+        try:
+            if enabled:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as f:
+                    f.write(
+                        "[Desktop Entry]\n"
+                        "Type=Application\n"
+                        "Name=Textr\n"
+                        f"Exec={self._autostart_exec()}\n"
+                        "X-GNOME-Autostart-enabled=true\n"
+                        "NoDisplay=false\n"
+                    )
+            elif os.path.exists(path):
+                os.remove(path)
+            return True
+        except Exception as exc:
+            print(f"Autostart change failed: {exc}")
+            return False
+
+    def _on_autostart_toggled(self, checked):
+        if self._set_autostart(bool(checked)):
+            self.statusBar().showMessage(
+                "Textr will start on login" if checked else "Textr will not start on login",
+                3000,
+            )
+        else:
+            # Revert the checkbox: the file change did not happen.
+            self.autostart_check.blockSignals(True)
+            self.autostart_check.setChecked(not checked)
+            self.autostart_check.blockSignals(False)
+            QMessageBox.warning(
+                self, "Start on login",
+                "Could not update the autostart entry. Check the permissions "
+                "of ~/.config/autostart and try again.",
+            )
+
+    # ----- Picker shortcut label (item 2) -----
+
+    def _picker_hotkey_display(self):
+        """'ctrl+alt+space' -> 'Ctrl+Alt+Space' for button labels."""
+        combo = ""
+        if self.daemon:
+            combo = self.daemon.config.get("picker_hotkey", "ctrl+alt+space") or "ctrl+alt+space"
+        return "+".join(part.capitalize() for part in combo.split("+"))
+
+    def _sync_picker_button_label(self):
+        if hasattr(self, "picker_btn"):
+            self.picker_btn.setText(f"Quick Insert ({self._picker_hotkey_display()})")
+
     def _focus_search(self):
         """Ctrl+F: focus the search box and select its contents."""
         if hasattr(self, "search_input"):
@@ -2220,10 +2720,11 @@ class TexterUI(QMainWindow):
             "Ctrl+N — Add snippet",
             "F2 / Enter — Edit selected snippet",
             "Delete — Delete selected snippet (to Trash)",
+            "Ctrl+Z — Undo last change (while the snippet list has focus)",
             "Ctrl+F — Focus search",
             "Esc — Clear search (while search has focus)",
             "Ctrl+1 / Ctrl+2 — Tree view / Table view",
-            "Ctrl+Alt+Space — Quick Insert (anywhere)",
+            f"{self._picker_hotkey_display()} — Quick Insert (anywhere)",
             "",
             "Closing the manager window quits Textr; the tray menu also has Quit.",
         ]
@@ -2304,6 +2805,11 @@ class TexterUI(QMainWindow):
             "settingsColumnWidths",
             [self.user_settings_table.columnWidth(c) for c in range(self.user_settings_table.columnCount())],
         )
+        settings.setValue(
+            "tableHiddenColumns",
+            [c for c in range(self.snippet_table.columnCount())
+             if self.snippet_table.isColumnHidden(c)],
+        )
         settings.sync()
 
     def _restore_window_state(self):
@@ -2346,6 +2852,15 @@ class TexterUI(QMainWindow):
                         continue
                     if _w > 0:
                         _table.setColumnWidth(_c, _w)
+        hidden = settings.value("tableHiddenColumns")
+        if isinstance(hidden, (list, tuple)):
+            for _c in hidden:
+                try:
+                    _c = int(_c)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= _c < self.snippet_table.columnCount():
+                    self.snippet_table.setColumnHidden(_c, True)
 
     def _settings_snapshot(self):
         """Raw settings-field values, for unsaved-change detection (item 3)."""
@@ -2362,6 +2877,8 @@ class TexterUI(QMainWindow):
             self.email_edit.text() if hasattr(self, "email_edit") else "",
             layout_data,
             self.paste_hotkey_edit.text() if hasattr(self, "paste_hotkey_edit") else "",
+            self.picker_hotkey_edit.text() if hasattr(self, "picker_hotkey_edit") else "",
+            self.close_behavior_combo.currentData() if hasattr(self, "close_behavior_combo") else None,
             self.date_format_edit.text() if hasattr(self, "date_format_edit") else "",
             self.time_format_edit.text() if hasattr(self, "time_format_edit") else "",
             tuple(rows),
@@ -2405,6 +2922,7 @@ class TexterUI(QMainWindow):
         triggers = self.selected_triggers()
         if not triggers or not self.daemon:
             return
+        self._push_undo(f"Bulk {action} ({len(triggers)} snippet(s))")
         for trigger in triggers:
             snippet = dict(self.daemon.snippets.get(trigger, {}))
             if action == "enable":
@@ -2430,6 +2948,7 @@ class TexterUI(QMainWindow):
         if not ok or not str(category).strip():
             return
         category = str(category).strip()
+        self._push_undo(f"Move {len(triggers)} snippet(s) to '{category}'")
         for trigger in triggers:
             snippet = dict(self.daemon.snippets.get(trigger, {}))
             snippet["category"] = category
@@ -2454,6 +2973,9 @@ class TexterUI(QMainWindow):
         )
         if reply != QMessageBox.Yes:
             return
+        self._push_undo(
+            f"Delete {len(triggers)} snippet(s)", trash_triggers=list(triggers)
+        )
         for trigger in triggers:
             self.daemon.delete_snippet(trigger)
         self.refresh_snippet_list()
@@ -2533,6 +3055,223 @@ class TexterUI(QMainWindow):
             self.preview_mode_btn.setText(
                 "Show rendered" if self._preview_mode == "raw" else "Show raw text"
             )
+
+    # ----- Library health, backup, columns, CSV, categories/tags -----
+
+    def _update_health_status(self):
+        """Status-bar totals + last backup time (item 5)."""
+        if not hasattr(self, "health_label") or not self.daemon:
+            return
+        with self.daemon.snippets_lock:
+            snippets = dict(self.daemon.snippets)
+        total = len(snippets)
+        unused = sum(1 for sn in snippets.values() if int(sn.get("usage", 0) or 0) == 0)
+        disabled = sum(1 for sn in snippets.values() if not sn.get("enabled", True))
+        duplicates = 0
+        if "_normalized_expansion" in globals():
+            seen = {}
+            for sn in snippets.values():
+                key = _normalized_expansion(sn)
+                seen[key] = seen.get(key, 0) + 1
+            duplicates = sum(count - 1 for count in seen.values() if count > 1)
+        last_backup = "never"
+        list_backups = getattr(self.daemon, "list_backups", None)
+        if callable(list_backups):
+            try:
+                backup_times = [
+                    b["mtime"] for b in list_backups() if b.get("kind") == "snippets"
+                ]
+                if backup_times:
+                    import datetime as _dt
+                    when = _dt.datetime.fromtimestamp(max(backup_times))
+                    today = _dt.datetime.now().date()
+                    if when.date() == today:
+                        last_backup = "today " + when.strftime("%H:%M")
+                    else:
+                        last_backup = when.strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        parts = [f"{total} snippet(s)", f"{unused} never used", f"{disabled} disabled"]
+        if duplicates:
+            parts.append(f"{duplicates} duplicate(s)")
+        parts.append(f"Last backup: {last_backup}")
+        self.health_label.setText("  \u2022  ".join(parts))
+
+    def backup_now(self):
+        """Back up snippets + config immediately (Library menu, item 5)."""
+        if not self.daemon:
+            return
+        backup = getattr(self.daemon, "backup_now", None)
+        paths = backup() if callable(backup) else []
+        self._update_health_status()
+        if paths:
+            self.statusBar().showMessage(
+                f"Backed up {len(paths)} file(s)", 3000
+            )
+        else:
+            self.statusBar().showMessage("Nothing to back up yet", 3000)
+
+    def _show_table_header_menu(self, pos):
+        """Right-click header menu: show/hide table columns (item 7)."""
+        table = self.snippet_table
+        header = table.horizontalHeader()
+        menu = QMenu(header)
+        for col in range(table.columnCount()):
+            header_item = table.horizontalHeaderItem(col)
+            label = header_item.text() if header_item is not None else f"Column {col}"
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(not table.isColumnHidden(col))
+            if col == 0:
+                # Trigger is the identity column; it stays visible.
+                action.setEnabled(False)
+            action.triggered.connect(
+                lambda checked, c=col: table.setColumnHidden(c, not checked)
+            )
+        menu.exec(header.mapToGlobal(pos))
+
+    def _fit_table_column(self, section):
+        """Double-click a header boundary: fit that column to contents."""
+        self.snippet_table.resizeColumnToContents(section)
+
+    def export_visible_csv(self):
+        """Export the current search/filter result to CSV (item 7).
+
+        Only visible (not hidden) columns are exported, in table order.
+        The Preview column carries the full rendered expansion.
+        """
+        if not self.daemon:
+            return
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export visible snippets", "", "CSV Files (*.csv)"
+        )
+        if not file_path:
+            return
+        table = self.snippet_table
+        visible = [c for c in range(table.columnCount()) if not table.isColumnHidden(c)]
+        headers = []
+        for col in visible:
+            header_item = table.horizontalHeaderItem(col)
+            headers.append(header_item.text() if header_item is not None else f"Column {col}")
+        try:
+            with open(file_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                for trigger, snippet in self._last_filtered_items:
+                    uses = int(snippet.get("usage", 0) or 0)
+                    values = {
+                        "Trigger": trigger,
+                        "Type": snippet.get("type", "variable"),
+                        "Category": snippet.get("category", "uncategorized"),
+                        "Tags": ", ".join(snippet.get("tags") or []),
+                        "Uses": str(uses),
+                        "Last used": snippet.get("last_used") or "never",
+                        "Preview": " ".join(str(self.get_expansion_preview(snippet)).split()),
+                    }
+                    writer.writerow([values.get(h, "") for h in headers])
+            self.statusBar().showMessage(
+                f"Exported {len(self._last_filtered_items)} snippet(s) to CSV", 3000
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", f"Could not write CSV:\n{exc}")
+
+    def category_counts(self):
+        """[(category, snippet count)] sorted by name."""
+        counts = {}
+        if self.daemon:
+            with self.daemon.snippets_lock:
+                snippets = list(self.daemon.snippets.values())
+            for snippet in snippets:
+                category = snippet.get("category", "uncategorized") or "uncategorized"
+                counts[category] = counts.get(category, 0) + 1
+        return sorted(counts.items(), key=lambda kv: kv[0].lower())
+
+    def tag_counts(self):
+        """[(tag, snippet count)] sorted by name."""
+        counts = {}
+        if self.daemon:
+            with self.daemon.snippets_lock:
+                snippets = list(self.daemon.snippets.values())
+            for snippet in snippets:
+                for tag in snippet.get("tags") or []:
+                    counts[tag] = counts.get(tag, 0) + 1
+        return sorted(counts.items(), key=lambda kv: kv[0].lower())
+
+    def rename_category(self, old, new):
+        """Rename a category (and its nested children) everywhere."""
+        if not self.daemon or not old or not new or old == new:
+            return 0
+        self._push_undo(f"Rename category '{old}' to '{new}'")
+        count = 0
+        with self.daemon.snippets_lock:
+            for snippet in self.daemon.snippets.values():
+                category = snippet.get("category", "uncategorized") or "uncategorized"
+                if category == old:
+                    snippet["category"] = new
+                    count += 1
+                elif category.startswith(old + "/"):
+                    snippet["category"] = new + category[len(old):]
+                    count += 1
+        self.daemon.save_snippets()
+        self.refresh_snippet_list()
+        return count
+
+    def delete_category(self, old):
+        """Move a category (and nested children) to 'uncategorized'."""
+        if not self.daemon or not old:
+            return 0
+        self._push_undo(f"Delete category '{old}'")
+        count = 0
+        with self.daemon.snippets_lock:
+            for snippet in self.daemon.snippets.values():
+                category = snippet.get("category", "uncategorized") or "uncategorized"
+                if category == old or category.startswith(old + "/"):
+                    snippet["category"] = "uncategorized"
+                    count += 1
+        self.daemon.save_snippets()
+        self.refresh_snippet_list()
+        return count
+
+    def rename_tag(self, old, new):
+        """Rename a tag on every snippet that has it (deduped)."""
+        if not self.daemon or not old or not new or old == new:
+            return 0
+        self._push_undo(f"Rename tag '{old}' to '{new}'")
+        count = 0
+        with self.daemon.snippets_lock:
+            for snippet in self.daemon.snippets.values():
+                tags = snippet.get("tags") or []
+                if old in tags:
+                    renamed = [new if t == old else t for t in tags]
+                    snippet["tags"] = list(dict.fromkeys(renamed))
+                    count += 1
+        self.daemon.save_snippets()
+        self.refresh_snippet_list()
+        return count
+
+    def delete_tag(self, old):
+        """Remove a tag from every snippet that has it."""
+        if not self.daemon or not old:
+            return 0
+        self._push_undo(f"Delete tag '{old}'")
+        count = 0
+        with self.daemon.snippets_lock:
+            for snippet in self.daemon.snippets.values():
+                tags = snippet.get("tags") or []
+                if old in tags:
+                    snippet["tags"] = [t for t in tags if t != old]
+                    count += 1
+        self.daemon.save_snippets()
+        self.refresh_snippet_list()
+        return count
+
+    def show_manage_categories(self):
+        """Open the category/tag management dialog (item 4)."""
+        if not self.daemon:
+            return
+        dialog = CategoryTagDialog(self)
+        dialog.exec()
+        self.refresh_snippet_list()
 
     def selected_trigger(self):
         """Trigger of the selected snippet in whichever view is active."""
@@ -2649,6 +3388,8 @@ class TexterUI(QMainWindow):
         # The tree delegate reads this for search-match bolding (item 2).
         self.snippet_list._search_query = query
         self._update_filter_status(len(items), len(snippets))
+        self._last_filtered_items = list(items)
+        self._update_health_status()
 
         if self._is_table_view():
             self._refresh_snippet_table(items, selected_before)
@@ -3039,6 +3780,7 @@ class TexterUI(QMainWindow):
                 trigger = snippet.pop("trigger")
                 if not self._confirm_trigger_conflicts(trigger):
                     return
+                self._push_undo(f"Add snippet '{trigger}'")
                 self.daemon.add_or_update_snippet(trigger, snippet)
                 self.refresh_snippet_list()
                 print(f"UI: Added snippet '{trigger}' (saved)")
@@ -3057,6 +3799,7 @@ class TexterUI(QMainWindow):
                 new_trigger = new_snippet.pop("trigger")
                 if not self._confirm_trigger_conflicts(new_trigger, exclude=trigger):
                     return
+                self._push_undo(f"Edit snippet '{trigger}'")
                 self.daemon.replace_snippet(trigger, new_trigger, new_snippet)
                 self.refresh_snippet_list()
                 print(f"UI: Edited snippet '{new_trigger}' (saved)")
@@ -3079,6 +3822,7 @@ class TexterUI(QMainWindow):
                     return
                 if not self._confirm_trigger_conflicts(new_trigger):
                     return
+                self._push_undo(f"Duplicate snippet as '{new_trigger}'")
                 self.daemon.add_or_update_snippet(new_trigger, new_snippet)
                 self.refresh_snippet_list()
                 print(f"UI: Duplicated snippet '{trigger}' as '{new_trigger}' (saved)")
@@ -3090,6 +3834,7 @@ class TexterUI(QMainWindow):
             return
         snippet = dict(self.daemon.snippets.get(trigger, {}))
         snippet["enabled"] = not snippet.get("enabled", True)
+        self._push_undo(f"{'Disable' if not snippet['enabled'] else 'Enable'} snippet '{trigger}'")
         self.daemon.add_or_update_snippet(trigger, snippet)
         self.refresh_snippet_list()
         state = "Disabled" if not snippet["enabled"] else "Enabled"
@@ -3108,6 +3853,7 @@ class TexterUI(QMainWindow):
             return
         snippet = dict(self.daemon.snippets.get(trigger, {}))
         snippet["favorite"] = not snippet.get("favorite", False)
+        self._push_undo(f"{'Favourite' if snippet['favorite'] else 'Unfavourite'} snippet '{trigger}'")
         self.daemon.add_or_update_snippet(trigger, snippet)
         self.refresh_snippet_list()
         state = "Favourited" if snippet["favorite"] else "Unfavourited"
@@ -3122,6 +3868,7 @@ class TexterUI(QMainWindow):
             return
         reply = QMessageBox.question(self, "Confirm", f"Delete '{trigger}'?")
         if reply == QMessageBox.Yes:
+            self._push_undo(f"Delete snippet '{trigger}'", trash_triggers=[trigger])
             self.daemon.delete_snippet(trigger)
             self.refresh_snippet_list()
             self.statusBar().showMessage(
@@ -3222,6 +3969,7 @@ class TexterUI(QMainWindow):
                     )
                     if reply != QMessageBox.Yes:
                         return
+                self._push_undo(f"Import {len(snippets)} snippet(s)")
                 self.daemon.import_snippets(snippets)
                 self.refresh_snippet_list()
                 self.find_missing_user_settings(notify=False)

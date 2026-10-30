@@ -125,6 +125,13 @@ class Daemon:
             # Shortcut used to paste expansions in clipboard mode. Some
             # terminals expect a different combo than Ctrl+Shift+V.
             "paste_hotkey": "ctrl+shift+v",
+            # Global shortcut for the quick-insert picker (X11/pynput
+            # only; editable in the manager's Settings, applied by
+            # restart_hotkey_listener without restarting the daemon).
+            "picker_hotkey": "ctrl+alt+space",
+            # What closing the manager window does: "quit" (default) or
+            # "tray" (hide to the system tray, daemon keeps running).
+            "close_behavior": "quit",
             # strftime formats for {date}/{time} and the :d/:time/:datetime
             # commands; configurable in the UI profile settings.
             "date_format": "%Y-%m-%d",
@@ -223,6 +230,87 @@ class Daemon:
             self.save_config()
             return True
         return False
+
+    def backup_now(self):
+        """Back up snippets.json and config.json immediately.
+
+        Returns the list of backup paths created (empty when there was
+        nothing to back up). Used by the manager's "Backup now" action
+        and its library-health status.
+        """
+        paths = []
+        for path, kind in (
+            (self.snippets_file, "snippets"),
+            (getattr(self, "config_file", None), "config"),
+        ):
+            if not path:
+                continue
+            dest = self._backup_file(path, kind)
+            if dest:
+                paths.append(dest)
+        return paths
+
+    def picker_hotkey_spec(self, combo=None):
+        """Convert a 'ctrl+alt+space' combo to a pynput GlobalHotKeys spec.
+
+        Returns e.g. '<ctrl>+<alt>+<space>', or None when the combo is
+        invalid (empty, a single key with no modifier, or no final key).
+        Named keys map to <name>; single characters stay bare.
+        """
+        parts = [p.strip().lower() for p in (combo or "").split("+") if p.strip()]
+        if len(parts) < 2:
+            return None
+        mods = {"ctrl": "ctrl", "control": "ctrl", "shift": "shift",
+                "alt": "alt", "super": "cmd", "cmd": "cmd", "meta": "cmd",
+                "win": "cmd"}
+        out = []
+        for name in parts[:-1]:
+            if name not in mods:
+                return None
+            out.append(f"<{mods[name]}>")
+        final = parts[-1]
+        if len(final) == 1:
+            out.append(final)
+        elif final.isalnum() or final in ("space", "enter", "tab", "esc", "escape"):
+            out.append(f"<{final}>")
+        else:
+            return None
+        return "+".join(out)
+
+    def restart_hotkey_listener(self):
+        """Re-register global hotkeys with the configured picker shortcut.
+
+        The pynput GlobalHotKeys listener cannot change its bindings
+        in place, so the old listener is stopped and a fresh one is
+        started with the same three actions. Returns True on success,
+        False when the combo is invalid or the listener cannot start
+        (e.g. on a Wayland session using the evdev backend, where
+        global hotkeys are not registered this way).
+        """
+        spec = self.picker_hotkey_spec(self.config.get("picker_hotkey", "ctrl+alt+space"))
+        if spec is None:
+            print("Picker hotkey not applied: invalid combo in config.")
+            return False
+        old = self.hotkey_listener
+        if old is not None:
+            try:
+                old.stop()
+            except Exception:
+                pass
+            self.hotkey_listener = None
+        try:
+            self.hotkey_listener = keyboard.GlobalHotKeys({
+                '<ctrl>+<shift>+p': self.toggle_pause_via_hotkey,
+                '<ctrl>+<shift>+<space>': self.show_window_via_hotkey,
+                spec: self.show_picker_via_hotkey,
+            })
+            self.hotkey_listener.daemon = True
+            self.hotkey_listener.start()
+        except Exception as e:
+            print("Failed to re-register global hotkeys listener:", e)
+            return False
+        print(f"Global hotkeys re-registered (picker: {spec})")
+        return True
 
     # ---- Trash -----------------------------------------------------------
     def load_trash(self):
@@ -1242,18 +1330,22 @@ class Daemon:
             self._run_pynput()
 
     def _run_pynput(self):
-        # Register global hotkey listener
+        # Register global hotkey listener. The picker binding comes
+        # from config (picker_hotkey), falling back to Ctrl+Alt+Space.
+        picker_spec = self.picker_hotkey_spec(
+            self.config.get("picker_hotkey", "ctrl+alt+space")
+        ) or '<ctrl>+<alt>+<space>'
         try:
             self.hotkey_listener = keyboard.GlobalHotKeys({
                 '<ctrl>+<shift>+p': self.toggle_pause_via_hotkey,
                 '<ctrl>+<shift>+<space>': self.show_window_via_hotkey,
-                '<ctrl>+<alt>+<space>': self.show_picker_via_hotkey,
+                picker_spec: self.show_picker_via_hotkey,
             })
             self.hotkey_listener.daemon = True
             self.hotkey_listener.start()
             print("Global hotkeys registered: Ctrl+Shift+P to toggle pause/resume, "
                   "Ctrl+Shift+Space to show the manager, "
-                  "Ctrl+Alt+Space for the quick-insert picker")
+                  f"{self.config.get('picker_hotkey', 'ctrl+alt+space')} for the quick-insert picker")
         except Exception as e:
             print("Failed to register global hotkeys listener:", e)
 
