@@ -1772,12 +1772,12 @@ class TexterUI(QMainWindow):
                 continue
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
                 raise ValueError(
-                    f"Row {row + 1}: use a setting name such as company or first_name."
+                    f"Row {row + 1}: use a placeholder name such as company or first_name."
                 )
             if key in self.BUILTIN_PLACEHOLDERS:
                 raise ValueError(f"'{key}' is reserved for a built-in placeholder.")
             if key in settings:
-                raise ValueError(f"Duplicate custom setting: '{key}'.")
+                raise ValueError(f"Duplicate placeholder: '{key}'.")
             settings[key] = value
         return settings
 
@@ -1911,14 +1911,14 @@ class TexterUI(QMainWindow):
         if notify:
             if unset:
                 message = (
-                    f"Added {len(added)} new setting(s).\n"
-                    f"{len(unset)} referenced setting(s) have no value:\n\n"
+                    f"Added {len(added)} new placeholder(s).\n"
+                    f"{len(unset)} referenced placeholder(s) have no value:\n\n"
                     + ", ".join(unset)
                     + "\n\nFill in their values, then click Save Settings."
                 )
             else:
                 message = "All detected custom placeholders already have values."
-            QMessageBox.information(self, "Snippet settings", message)
+            QMessageBox.information(self, "Placeholder values", message)
         elif added:
             self.statusBar().showMessage(
                 f"Found {len(added)} missing custom setting(s). "
@@ -2750,12 +2750,27 @@ class TexterUI(QMainWindow):
         preview_layout.addLayout(preview_btn_layout)
         right_layout.addLayout(preview_layout)
 
-        # User settings panel
-        settings_group = QGroupBox("User Profile Settings")
-        self.settings_group = settings_group
-        settings_layout = QFormLayout(settings_group)
+        # Settings, in three separate sections:
+        # "Your details" (Name/Email, the values for {name}/{email}),
+        # "Preferences" (keyboard, shortcuts, formats, close behaviour,
+        # start-on-login) and "Placeholder values" (the {company}-style
+        # values, formerly lumped in as "custom settings"). One Save
+        # Settings button covers all three; each section folds away
+        # separately and its folded state is saved with the window state.
+
+        # --- Your details ---
+        details_group = QGroupBox("")
+        self.details_group = details_group
+        details_layout = QFormLayout(details_group)
         self.name_edit = QLineEdit(self.daemon.config.get("name", "") if (self.daemon and hasattr(self.daemon, "config")) else "")
         self.email_edit = QLineEdit(self.daemon.config.get("email", "") if (self.daemon and hasattr(self.daemon, "config")) else "")
+        details_layout.addRow("Name:", self.name_edit)
+        details_layout.addRow("Email:", self.email_edit)
+
+        # --- Preferences ---
+        prefs_group = QGroupBox("")
+        self.prefs_group = prefs_group
+        prefs_layout = QFormLayout(prefs_group)
         # Keyboard layout for the evdev Wayland input listener (used when the
         # session is native Wayland; ignored under X11).
         self.layout_combo = QComboBox()
@@ -2779,22 +2794,10 @@ class TexterUI(QMainWindow):
             if (self.daemon and hasattr(self.daemon, "config")) else "%H:%M"
         )
         self.time_format_edit.setPlaceholderText("%H:%M (strftime)")
-        self.save_settings_btn = QPushButton("Save Settings")
-        self.save_settings_btn.clicked.connect(self.save_user_config)
-        # Unsaved-changes tracking (item 3): any edit marks the button
-        # dirty until Save Settings is clicked (see _update_settings_dirty).
-        self.name_edit.textChanged.connect(self._update_settings_dirty)
-        self.email_edit.textChanged.connect(self._update_settings_dirty)
-        self.layout_combo.currentIndexChanged.connect(self._update_settings_dirty)
-        self.paste_hotkey_edit.textChanged.connect(self._update_settings_dirty)
-        self.date_format_edit.textChanged.connect(self._update_settings_dirty)
-        self.time_format_edit.textChanged.connect(self._update_settings_dirty)
-        settings_layout.addRow("Name:", self.name_edit)
-        settings_layout.addRow("Email:", self.email_edit)
-        settings_layout.addRow("Keyboard layout:", self.layout_combo)
-        settings_layout.addRow("Paste shortcut:", self.paste_hotkey_edit)
-        settings_layout.addRow("Date format:", self.date_format_edit)
-        settings_layout.addRow("Time format:", self.time_format_edit)
+        prefs_layout.addRow("Keyboard layout:", self.layout_combo)
+        prefs_layout.addRow("Paste shortcut:", self.paste_hotkey_edit)
+        prefs_layout.addRow("Date format:", self.date_format_edit)
+        prefs_layout.addRow("Time format:", self.time_format_edit)
         self.picker_hotkey_edit = QLineEdit(
             self.daemon.config.get("picker_hotkey", "ctrl+alt+space")
             if (self.daemon and hasattr(self.daemon, "config")) else "ctrl+alt+space"
@@ -2804,7 +2807,7 @@ class TexterUI(QMainWindow):
             "Global shortcut for Quick Insert. Applies when you click Save "
             "Settings (X11/pynput only; also takes effect on next start)."
         )
-        settings_layout.addRow("Quick Insert shortcut:", self.picker_hotkey_edit)
+        prefs_layout.addRow("Quick Insert shortcut:", self.picker_hotkey_edit)
         self.close_behavior_combo = QComboBox()
         self.close_behavior_combo.addItem("Quit Textr", "quit")
         self.close_behavior_combo.addItem("Minimize to tray", "tray")
@@ -2813,18 +2816,21 @@ class TexterUI(QMainWindow):
             if (self.daemon and hasattr(self.daemon, "config")) else "quit"
         )
         self.close_behavior_combo.setCurrentIndex(max(_close_idx, 0))
-        settings_layout.addRow("Close window:", self.close_behavior_combo)
+        prefs_layout.addRow("Close window:", self.close_behavior_combo)
         self.autostart_check = QCheckBox("Start Textr when I log in (Linux)")
         self.autostart_check.blockSignals(True)
         self.autostart_check.setChecked(self._autostart_enabled())
         self.autostart_check.blockSignals(False)
         self.autostart_check.toggled.connect(self._on_autostart_toggled)
-        settings_layout.addRow(self.autostart_check)
-        self.picker_hotkey_edit.textChanged.connect(self._update_settings_dirty)
-        self.close_behavior_combo.currentIndexChanged.connect(self._update_settings_dirty)
+        prefs_layout.addRow(self.autostart_check)
+
+        # --- Placeholder values ---
+        values_group = QGroupBox("")
+        self.values_group = values_group
+        values_layout = QFormLayout(values_group)
         self.user_settings_table = QTableWidget(0, 3)
         self.user_settings_table.setHorizontalHeaderLabels(
-            ["Setting", "Value", "Used by"]
+            ["Placeholder", "Value", "Used by"]
         )
         header = self.user_settings_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -2838,28 +2844,28 @@ class TexterUI(QMainWindow):
         self.user_settings_table.setSortingEnabled(True)
         self.user_settings_table.setMinimumHeight(140)
         self.user_settings_table.itemChanged.connect(self._update_settings_dirty)
-        settings_layout.addRow("Custom settings:", self.user_settings_table)
+        values_layout.addRow(self.user_settings_table)
 
         custom_buttons = QHBoxLayout()
-        self.add_setting_btn = QPushButton("Add setting")
+        self.add_setting_btn = QPushButton("Add value")
         self.add_setting_btn.clicked.connect(self.add_user_setting)
         self.remove_setting_btn = QPushButton("Remove selected")
         self.remove_setting_btn.clicked.connect(self.remove_user_settings)
         custom_buttons.addWidget(self.add_setting_btn)
         custom_buttons.addWidget(self.remove_setting_btn)
-        settings_layout.addRow(custom_buttons)
+        values_layout.addRow(custom_buttons)
 
-        self.find_missing_settings_btn = QPushButton("Find missing settings")
+        self.find_missing_settings_btn = QPushButton("Find missing placeholders")
         self.find_missing_settings_btn.clicked.connect(self.find_missing_user_settings)
-        settings_layout.addRow(self.find_missing_settings_btn)
+        values_layout.addRow(self.find_missing_settings_btn)
         hint = QLabel(
-            "Double-click Setting/Value cells to edit. The Used by column shows "
-            "how many snippets use each setting and which ones. Missing "
-            "{setting_name} placeholders are added automatically on startup and "
+            "Double-click Placeholder/Value cells to edit. The Used by column shows "
+            "how many snippets use each placeholder and which ones. Missing "
+            "{placeholder_name} placeholders are added automatically on startup and "
             "after imports. Fill in values and click Save Settings."
         )
         hint.setWordWrap(True)
-        settings_layout.addRow(hint)
+        values_layout.addRow(hint)
 
         config = self.daemon.config if self.daemon else {}
         custom_settings = config.get("user_settings", {})
@@ -2867,19 +2873,36 @@ class TexterUI(QMainWindow):
             for key, value in custom_settings.items():
                 self.add_user_setting_row(str(key), str(value))
 
-        settings_layout.addRow(self.save_settings_btn)
-        # Collapsible settings (declutter): the preview stays visible
-        # and the profile/custom-settings block folds away with one
-        # click; its state is saved with the window state.
-        self.settings_toggle_btn = QPushButton("\u25be Profile & custom settings")
-        self.settings_toggle_btn.setCheckable(True)
-        self.settings_toggle_btn.setChecked(True)
-        self.settings_toggle_btn.setToolTip(
-            "Show or hide the profile and custom settings; the preview above stays visible"
-        )
-        self.settings_toggle_btn.toggled.connect(self._on_settings_toggle)
-        right_layout.addWidget(self.settings_toggle_btn)
-        right_layout.addWidget(settings_group)
+        # One Save button for all three sections.
+        self.save_settings_btn = QPushButton("Save Settings")
+        self.save_settings_btn.clicked.connect(self.save_user_config)
+        # Unsaved-changes tracking (item 3): any edit marks the button
+        # dirty until Save Settings is clicked (see _update_settings_dirty).
+        self.name_edit.textChanged.connect(self._update_settings_dirty)
+        self.email_edit.textChanged.connect(self._update_settings_dirty)
+        self.layout_combo.currentIndexChanged.connect(self._update_settings_dirty)
+        self.paste_hotkey_edit.textChanged.connect(self._update_settings_dirty)
+        self.date_format_edit.textChanged.connect(self._update_settings_dirty)
+        self.time_format_edit.textChanged.connect(self._update_settings_dirty)
+        self.picker_hotkey_edit.textChanged.connect(self._update_settings_dirty)
+        self.close_behavior_combo.currentIndexChanged.connect(self._update_settings_dirty)
+
+        # Section toggles (headers): one per section, folded state saved.
+        self.details_toggle_btn = self._make_section_toggle("Your details", details_group)
+        self.prefs_toggle_btn = self._make_section_toggle("Preferences", prefs_group)
+        self.values_toggle_btn = self._make_section_toggle("Placeholder values", values_group)
+        self._section_toggles = {
+            "details": (self.details_toggle_btn, details_group, "Your details"),
+            "preferences": (self.prefs_toggle_btn, prefs_group, "Preferences"),
+            "values": (self.values_toggle_btn, values_group, "Placeholder values"),
+        }
+        right_layout.addWidget(self.details_toggle_btn)
+        right_layout.addWidget(details_group)
+        right_layout.addWidget(self.prefs_toggle_btn)
+        right_layout.addWidget(prefs_group)
+        right_layout.addWidget(self.values_toggle_btn)
+        right_layout.addWidget(values_group)
+        right_layout.addWidget(self.save_settings_btn)
 
 
         # Bottom controls, grouped by intent instead of two flat rows of
@@ -3198,25 +3221,21 @@ class TexterUI(QMainWindow):
         if hasattr(self, "picker_btn"):
             self.picker_btn.setText(f"Quick Insert ({self._picker_hotkey_display()})")
 
-    def _on_settings_toggle(self, checked):
-        """Fold/unfold the profile & custom-settings block."""
-        if hasattr(self, "settings_group"):
-            self.settings_group.setVisible(bool(checked))
-        self._sync_settings_toggle_text()
+    def _make_section_toggle(self, title, group):
+        """Fold/unfold header button for one settings section."""
+        btn = QPushButton("\u25be " + title)
+        btn.setCheckable(True)
+        btn.setChecked(True)
+        btn.setToolTip(f"Show or hide {title}")
+        btn.toggled.connect(
+            lambda checked, b=btn, g=group, t=title: self._on_section_toggle(b, g, t, checked)
+        )
+        return btn
 
-    def _sync_settings_toggle_text(self):
-        """Toggle label: fold arrow, plus a bullet when settings are dirty."""
-        if not hasattr(self, "settings_toggle_btn"):
-            return
-        arrow = "\u25be" if self.settings_toggle_btn.isChecked() else "\u25b8"
-        dirty = False
-        if getattr(self, "_settings_baseline", None) is not None:
-            try:
-                dirty = self._settings_snapshot() != self._settings_baseline
-            except Exception:
-                dirty = False
-        bullet = " \u2022" if dirty else ""
-        self.settings_toggle_btn.setText(f"{arrow} Profile & custom settings{bullet}")
+    def _on_section_toggle(self, btn, group, title, checked):
+        """Fold/unfold one settings section and refresh its header arrow."""
+        group.setVisible(bool(checked))
+        btn.setText(f"{'\u25be' if checked else '\u25b8'} {title}")
 
     def _focus_search(self):
         """Ctrl+F: focus the search box and select its contents."""
@@ -3325,11 +3344,12 @@ class TexterUI(QMainWindow):
             "settingsColumnWidths",
             [self.user_settings_table.columnWidth(c) for c in range(self.user_settings_table.columnCount())],
         )
-        settings.setValue(
-            "settingsExpanded",
-            bool(self.settings_toggle_btn.isChecked())
-            if hasattr(self, "settings_toggle_btn") else True,
-        )
+        for _key, (_btn, _group, _title) in getattr(
+            self, "_section_toggles", {}
+        ).items():
+            settings.setValue(
+                f"section{_key.capitalize()}Expanded", bool(_btn.isChecked())
+            )
         settings.setValue(
             "tableHiddenColumns",
             [c for c in range(self.snippet_table.columnCount())
@@ -3362,19 +3382,25 @@ class TexterUI(QMainWindow):
                     combo.blockSignals(True)
                     combo.setCurrentIndex(idx)
                     combo.blockSignals(False)
-        _expanded = settings.value("settingsExpanded")
-        if _expanded is not None and hasattr(self, "settings_toggle_btn"):
+        _legacy_expanded = settings.value("settingsExpanded")
+        for _key, (_btn, _group, _title) in getattr(
+            self, "_section_toggles", {}
+        ).items():
+            _value = settings.value(f"section{_key.capitalize()}Expanded")
+            if _value is None:
+                _value = _legacy_expanded
+            if _value is None:
+                continue
             _checked = (
-                bool(_expanded)
-                if isinstance(_expanded, bool)
-                else str(_expanded).lower() == "true"
+                bool(_value)
+                if isinstance(_value, bool)
+                else str(_value).lower() == "true"
             )
-            self.settings_toggle_btn.blockSignals(True)
-            self.settings_toggle_btn.setChecked(_checked)
-            self.settings_toggle_btn.blockSignals(False)
-            if hasattr(self, "settings_group"):
-                self.settings_group.setVisible(_checked)
-            self._sync_settings_toggle_text()
+            _btn.blockSignals(True)
+            _btn.setChecked(_checked)
+            _btn.blockSignals(False)
+            _group.setVisible(_checked)
+            _btn.setText(f"{'\u25be' if _checked else '\u25b8'} {_title}")
         for _table, _key in (
             (getattr(self, "snippet_table", None), "tableColumnWidths"),
             (getattr(self, "user_settings_table", None), "settingsColumnWidths"),
@@ -3430,7 +3456,6 @@ class TexterUI(QMainWindow):
             return
         dirty = self._settings_snapshot() != self._settings_baseline
         self.save_settings_btn.setText("Save Settings \u2022" if dirty else "Save Settings")
-        self._sync_settings_toggle_text()
         self.save_settings_btn.setObjectName("save_settings_dirty" if dirty else "")
         try:
             _style = self.save_settings_btn.style()
