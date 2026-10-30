@@ -279,6 +279,30 @@ class SnippetTableWidget(QTableWidget):
         menu.addAction("Duplicate", window.duplicate_snippet)
         menu.addAction("Unfavourite" if favorite else "Favourite", window.toggle_snippet_favorite)
         menu.addAction("Disable" if enabled else "Enable", window.toggle_snippet_enabled)
+        # Move to category (item 3): submenu of existing categories, the
+        # current one ticked/disabled for a single selection, plus a
+        # "New category..." prompt. Applies to all selected rows, like
+        # the bulk action, through one shared window method.
+        move_menu = QMenu("Move to category", self)
+        categories = (
+            window.daemon.get_categories()
+            if window.daemon and hasattr(window.daemon, "get_categories")
+            else []
+        )
+        selected = window.selected_triggers() if hasattr(window, "selected_triggers") else [trigger]
+        current_cats = {
+            (window.daemon.snippets.get(t, {}) or {}).get("category", "uncategorized")
+            for t in selected
+        }
+        for cat in categories:
+            act = move_menu.addAction(cat)
+            act.setCheckable(True)
+            act.setChecked(len(current_cats) == 1 and cat in current_cats)
+            act.setEnabled(not (len(selected) == 1 and cat in current_cats))
+            act.triggered.connect(lambda _c, c=cat: window.move_selected_to_category(c))
+        move_menu.addSeparator()
+        move_menu.addAction("New category\u2026", window.prompt_move_to_new_category)
+        menu.addMenu(move_menu)
         menu.addSeparator()
         menu.addAction("Delete", window.delete_snippet)
         menu.exec(event.globalPos())

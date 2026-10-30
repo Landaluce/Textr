@@ -23,7 +23,7 @@ dark_stylesheet = """
         left: 10px;
         padding: 0 5px;
     }
-    QLineEdit, QTextEdit, QComboBox {
+    QLineEdit, QTextEdit, QTextBrowser, QComboBox {
         background-color: #15151c;
         color: #d6d6de;
         border: 1px solid #2e2e38;
@@ -77,7 +77,7 @@ dark_stylesheet = """
         border: 1px solid #2e2e38;
         padding: 5px;
     }
-    QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QTreeWidget:focus {
+    QLineEdit:focus, QTextEdit:focus, QTextBrowser:focus, QComboBox:focus, QTreeWidget:focus {
         border: 1px solid #ff9a3c;
     }
     QPushButton {

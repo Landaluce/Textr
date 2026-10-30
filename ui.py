@@ -11,7 +11,7 @@ from datetime import datetime
 from copy import deepcopy
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QTextEdit, QPushButton, QComboBox,
+    QLabel, QLineEdit, QTextEdit, QTextBrowser, QPushButton, QComboBox,
     QListWidget, QListWidgetItem, QDialog, QFormLayout,
     QMessageBox, QFileDialog, QGroupBox, QSystemTrayIcon, QMenu,
     QCheckBox, QTreeWidget, QTreeWidgetItem, QAbstractItemView,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox,
     QRadioButton, QScrollArea, QFrame, QInputDialog
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect, QSettings, QEvent
+from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect, QSettings, QEvent, QSize, QUrl
 from PySide6.QtGui import (
     QIcon, QAction, QPixmap, QPainter, QColor, QPalette, QPainterPath,
     QShortcut, QKeySequence,
@@ -61,6 +61,14 @@ from dialogs import (
 )
 
 
+STARTER_SNIPPETS = {
+    ";sig": {"type": "variable", "value": "Best regards,\n{name}", "category": "Starter", "tags": ["starter"], "usage": 0, "last_used": None, "enabled": True},
+    ";today": {"type": "variable", "value": "Today is {date}.", "category": "Starter", "tags": ["starter"], "usage": 0, "last_used": None, "enabled": True},
+    ";thanks": {"type": "variable", "value": "Thanks for getting back to me \u2014 I\'ll follow up shortly.\nBest regards,\n{name}", "category": "Starter", "tags": ["starter"], "usage": 0, "last_used": None, "enabled": True},
+    ";tone": {"type": "variable", "value": "{choice:Formal|Friendly} regards,\n{name}", "category": "Starter", "tags": ["starter"], "usage": 0, "last_used": None, "enabled": True},
+}
+
+
 class TexterUI(QMainWindow):
     quit_requested = Signal()
     prompt_requested = Signal(object)
@@ -77,6 +85,11 @@ class TexterUI(QMainWindow):
         self._focus_app = None
         # UI-improvement state (defaults; setup_ui / refresh fill them in).
         self._quick_filter = "all"
+        self._density = "comfortable"
+        self._text_size = "medium"
+        self._search_regex = False
+        self._search_case_sensitive = False
+        self._search_regex_error = None
         self._preview_mode = "rendered"
         self._preview_raw_text = ""
         self._preview_rendered_text = ""
@@ -151,6 +164,8 @@ class TexterUI(QMainWindow):
     def quit_app(self):
         """Quit the entire application"""
         print("UI: Quitting application...")
+        if not self._confirm_unsaved_settings():
+            return
         self.really_quit = True
         if self.daemon:
             self.daemon.save_snippets()
@@ -160,7 +175,37 @@ class TexterUI(QMainWindow):
         self.close()
         QApplication.quit()
 
+    def _confirm_unsaved_settings(self):
+        """Ask about unsaved settings before closing/quitting.
+
+        Returns True to proceed. Save re-runs the normal save path; if
+        validation fails there the settings are still dirty, so closing
+        is refused. Discard closes without saving (for close-to-tray the
+        edits stay in the hidden window's fields until the next save).
+        """
+        if getattr(self, "_settings_baseline", None) is None:
+            return True
+        if self._settings_snapshot() == self._settings_baseline:
+            return True
+        reply = QMessageBox.question(
+            self,
+            "Unsaved settings",
+            "You have unsaved settings changes.\nSave them before closing?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if reply == QMessageBox.Cancel:
+            return False
+        if reply == QMessageBox.Save:
+            self.save_user_config()
+            return self._settings_snapshot() == self._settings_baseline
+        return True
+
     def closeEvent(self, event):
+        if not (hasattr(self, "really_quit") and self.really_quit):
+            if not self._confirm_unsaved_settings():
+                event.ignore()
+                return
         # Persist window state on every close, including the
         # quit_app() path, which re-enters here with really_quit set.
         try:
@@ -191,6 +236,12 @@ class TexterUI(QMainWindow):
     BUILTIN_PLACEHOLDERS = _BUILTIN_PLACEHOLDERS
 
     def add_user_setting_row(self, key="", value=""):
+        # Sorting must be off while the row is filled one cell at a time:
+        # with it on, the first setItem can trigger a resort that moves
+        # the half-filled row, so the value lands on a different row
+        # from its key (the preview fill-in hit exactly this).
+        was_sorting = self.user_settings_table.isSortingEnabled()
+        self.user_settings_table.setSortingEnabled(False)
         row = self.user_settings_table.rowCount()
         self.user_settings_table.insertRow(row)
         self.user_settings_table.setItem(row, 0, QTableWidgetItem(key))
@@ -201,6 +252,7 @@ class TexterUI(QMainWindow):
             Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
         )
         self.user_settings_table.setItem(row, 2, used_by_item)
+        self.user_settings_table.setSortingEnabled(was_sorting)
         return row
 
     def add_user_setting(self):
@@ -726,6 +778,26 @@ class TexterUI(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to export pack: {e}")
 
+    def import_starter_snippets(self):
+        """Import the starter snippets, skipping triggers already present."""
+        if not self.daemon:
+            return
+        missing = {
+            trigger: deepcopy(snippet)
+            for trigger, snippet in STARTER_SNIPPETS.items()
+            if trigger not in self.daemon.snippets
+        }
+        if not missing:
+            self.statusBar().showMessage("Starter snippets are already in your library", 3000)
+            return
+        self.daemon.import_snippets(missing)
+        self.refresh_snippet_list()
+        skipped = len(STARTER_SNIPPETS) - len(missing)
+        message = f"Imported {len(missing)} starter snippet(s)"
+        if skipped:
+            message += f" ({skipped} already in your library)"
+        self.statusBar().showMessage(message, 4000)
+
     def import_pack(self):
         if not self.daemon:
             return
@@ -915,10 +987,22 @@ class TexterUI(QMainWindow):
         left_layout.addLayout(cat_layout)
 
         # Search box
+        search_layout = QHBoxLayout()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search triggers or expansion text...")
         self.search_input.textChanged.connect(self.refresh_snippet_list)
-        left_layout.addWidget(self.search_input)
+        search_layout.addWidget(self.search_input)
+        self.search_regex_btn = QPushButton(".*")
+        self.search_regex_btn.setCheckable(True)
+        self.search_regex_btn.setToolTip("Treat the search text as a regular expression")
+        self.search_regex_btn.toggled.connect(self._on_search_mode_changed)
+        search_layout.addWidget(self.search_regex_btn)
+        self.search_case_btn = QPushButton("Aa")
+        self.search_case_btn.setCheckable(True)
+        self.search_case_btn.setToolTip("Case-sensitive search")
+        self.search_case_btn.toggled.connect(self._on_search_mode_changed)
+        search_layout.addWidget(self.search_case_btn)
+        left_layout.addLayout(search_layout)
 
         # Quick filters (item 2): one-tap filters above the list.
         # Clicking the active chip again clears back to All.
@@ -1037,6 +1121,10 @@ class TexterUI(QMainWindow):
         self.empty_state_label.setWordWrap(True)
         self.empty_state_label.setAlignment(Qt.AlignCenter)
         left_layout.addWidget(self.empty_state_label)
+        self.empty_state_btn = QPushButton("Import starter snippets")
+        self.empty_state_btn.setToolTip("Add four starter snippets to get going")
+        self.empty_state_btn.clicked.connect(self.import_starter_snippets)
+        left_layout.addWidget(self.empty_state_btn)
         self._apply_snippet_view()
 
         # Add/Edit/Delete buttons (shortcuts shown inline in the labels so
@@ -1171,8 +1259,12 @@ class TexterUI(QMainWindow):
         self.preview_note_label.setWordWrap(True)
         preview_layout.addWidget(self.preview_note_label)
         preview_layout.addWidget(QLabel("Expanded text:"))
-        self.preview_text = QTextEdit()
+        # QTextBrowser, not QTextEdit: only the browser emits
+        # anchorClicked, which the clickable missing placeholders need.
+        self.preview_text = QTextBrowser()
         self.preview_text.setReadOnly(True)
+        self.preview_text.setOpenLinks(False)
+        self.preview_text.anchorClicked.connect(self._fill_placeholder_from_preview)
         self.preview_text.setPlaceholderText("Select a template snippet to preview")
         preview_layout.addWidget(self.preview_text)
         # Missing-placeholder flag (item 5): shown under the preview
@@ -1275,6 +1367,19 @@ class TexterUI(QMainWindow):
         self.autostart_check.blockSignals(False)
         self.autostart_check.toggled.connect(self._on_autostart_toggled)
         prefs_layout.addRow(self.autostart_check)
+        self.density_combo = QComboBox()
+        self.density_combo.addItem("Comfortable", "comfortable")
+        self.density_combo.addItem("Compact", "compact")
+        self.density_combo.setToolTip("Row density for the snippet list and table")
+        self.density_combo.currentIndexChanged.connect(self._on_display_pref_changed)
+        prefs_layout.addRow("Density:", self.density_combo)
+        self.text_size_combo = QComboBox()
+        self.text_size_combo.addItem("Small", "small")
+        self.text_size_combo.addItem("Medium", "medium")
+        self.text_size_combo.addItem("Large", "large")
+        self.text_size_combo.setToolTip("Text size for the manager window")
+        self.text_size_combo.currentIndexChanged.connect(self._on_display_pref_changed)
+        prefs_layout.addRow("Text size:", self.text_size_combo)
 
         # --- Placeholder values ---
         values_group = QGroupBox("")
@@ -1412,6 +1517,7 @@ class TexterUI(QMainWindow):
         self.library_menu.addSeparator()
         self.library_menu.addAction("Import Pack", self.import_pack)
         self.library_menu.addAction("Export Pack", self.export_pack)
+        self.library_menu.addAction("Import starter snippets", self.import_starter_snippets)
         self.library_menu.addSeparator()
         self.library_menu.addAction("Backups", self.show_backups)
         self.library_menu.addAction("Trash", self.show_trash)
@@ -1478,6 +1584,7 @@ class TexterUI(QMainWindow):
         self._restore_window_state()
         self._apply_snippet_view()
         self.refresh_snippet_list()
+        self._restore_selection()
         self.find_missing_user_settings(notify=False)
         self._settings_baseline = self._settings_snapshot()
         self._update_settings_dirty()
@@ -1716,6 +1823,70 @@ class TexterUI(QMainWindow):
         manual = getattr(self, "_values_manual_show", False)
         group.setVisible(btn.isChecked() and (has_selection or manual))
 
+    def _sync_display_pref_combos(self):
+        """Set the Density / Text size combos from the restored values."""
+        for _combo, _value in (
+            (getattr(self, "density_combo", None), getattr(self, "_density", "comfortable")),
+            (getattr(self, "text_size_combo", None), getattr(self, "_text_size", "medium")),
+        ):
+            if _combo is None:
+                continue
+            _idx = _combo.findData(_value)
+            if _idx >= 0:
+                _combo.blockSignals(True)
+                _combo.setCurrentIndex(_idx)
+                _combo.blockSignals(False)
+
+    def _on_display_pref_changed(self):
+        """Density / text size changed: apply at once and persist."""
+        if hasattr(self, "density_combo"):
+            self._density = self.density_combo.currentData() or "comfortable"
+        if hasattr(self, "text_size_combo"):
+            self._text_size = self.text_size_combo.currentData() or "medium"
+        self._apply_display_prefs()
+        try:
+            self._app_settings.setValue("density", self._density)
+            self._app_settings.setValue("textSize", self._text_size)
+        except Exception:
+            pass
+
+    def _apply_display_prefs(self):
+        """Apply density (row heights) and text size (window stylesheet).
+
+        Text size goes through a window-level stylesheet because the app
+        stylesheet fixes QWidget font-size in px, which an application
+        font change cannot override. Density sets table row heights
+        directly; tree rows read _density in _add_snippet_item.
+        """
+        compact = getattr(self, "_density", "comfortable") == "compact"
+        row_height = 22 if compact else 30
+        table = getattr(self, "snippet_table", None)
+        if table is not None:
+            try:
+                table.verticalHeader().setDefaultSectionSize(row_height)
+                for _r in range(table.rowCount()):
+                    table.setRowHeight(_r, row_height)
+            except Exception:
+                pass
+        # Preview height lock: the Expanded-text box keeps its natural
+        # sizeHint height in every state, instead of stretching to fill
+        # freed space when a settings section is folded (its Expanding
+        # vertical policy let it grow). setFixedHeight is re-applied
+        # here so it survives refreshes and follows text-size changes.
+        preview = getattr(self, "preview_text", None)
+        if preview is not None:
+            try:
+                preview.setFixedHeight(preview.sizeHint().height())
+            except Exception:
+                pass
+        px = {"small": 12, "medium": 14, "large": 17}.get(
+            getattr(self, "_text_size", "medium"), 14
+        )
+        try:
+            self.setStyleSheet(f"QWidget {{ font-size: {px}px; }}")
+        except Exception:
+            pass
+
     def _focus_search(self):
         """Ctrl+F: focus the search box and select its contents."""
         if hasattr(self, "search_input"):
@@ -1806,6 +1977,17 @@ class TexterUI(QMainWindow):
                 self.empty_state_label.setVisible(True)
             else:
                 self.empty_state_label.setVisible(False)
+        if hasattr(self, "empty_state_btn"):
+            # Starter import is only offered for a genuinely empty library:
+            # no snippets in the "all" category view, no search, All filter.
+            _empty_library = (
+                total == 0
+                and not self._search_query()
+                and getattr(self, "_quick_filter", "all") == "all"
+                and getattr(self, "category_combo", None) is not None
+                and self.category_combo.currentText() == "all"
+            )
+            self.empty_state_btn.setVisible(bool(_empty_library))
 
     def _save_window_state(self):
         """Persist geometry, view/group/sort, and column widths (item 1)."""
@@ -1815,6 +1997,10 @@ class TexterUI(QMainWindow):
         settings.setValue("group", self.group_combo.currentData())
         settings.setValue("subgroup", self.subgroup_combo.currentData())
         settings.setValue("sort", self.sort_combo.currentData())
+        settings.setValue("density", getattr(self, "_density", "comfortable"))
+        settings.setValue("textSize", getattr(self, "_text_size", "medium"))
+        _selected = self.selected_trigger()
+        settings.setValue("selectedTrigger", _selected or "")
         settings.setValue(
             "tableColumnWidths",
             [self.snippet_table.columnWidth(c) for c in range(self.snippet_table.columnCount())],
@@ -1861,6 +2047,14 @@ class TexterUI(QMainWindow):
                     combo.blockSignals(True)
                     combo.setCurrentIndex(idx)
                     combo.blockSignals(False)
+        _density = settings.value("density")
+        if _density in ("comfortable", "compact"):
+            self._density = _density
+        _text_size = settings.value("textSize")
+        if _text_size in ("small", "medium", "large"):
+            self._text_size = _text_size
+        self._sync_display_pref_combos()
+        self._apply_display_prefs()
         _legacy_expanded = settings.value("settingsExpanded")
         for _key, (_btn, _group, _title) in getattr(
             self, "_section_toggles", {}
@@ -1907,6 +2101,36 @@ class TexterUI(QMainWindow):
                     self.snippet_table.setColumnHidden(_c, True)
 
         self._sync_values_section_visibility()
+    def _restore_selection(self):
+        """Re-select the snippet selected when the window last closed.
+
+        Only when it still exists and the current category filter would
+        show it; otherwise the no-selection state stands.
+        """
+        settings = getattr(self, "_app_settings", None)
+        if settings is None or not self.daemon:
+            return
+        trigger = settings.value("selectedTrigger")
+        if not trigger or trigger not in self.daemon.snippets:
+            return
+        snippet = self.daemon.snippets.get(trigger, {}) or {}
+        if self.category_combo.currentText() not in (
+            "all",
+            snippet.get("category", "uncategorized"),
+        ):
+            return
+        if self._is_table_view() and hasattr(self, "snippet_table"):
+            for _r in range(self.snippet_table.rowCount()):
+                _item = self.snippet_table.item(_r, 0)
+                if _item is not None and _item.data(Qt.UserRole + 1) == trigger:
+                    self.snippet_table.setCurrentCell(_r, 0)
+                    break
+        elif hasattr(self, "snippet_list"):
+            _item = self.snippet_list.find_item(trigger)
+            if _item is not None:
+                self.snippet_list.setCurrentItem(_item)
+        self.on_selection_changed()
+
     def _settings_snapshot(self):
         """Raw settings-field values, for unsaved-change detection (item 3)."""
         rows = []
@@ -1992,6 +2216,13 @@ class TexterUI(QMainWindow):
         )
         if not ok or not str(category).strip():
             return
+        self.move_selected_to_category(str(category).strip())
+
+    def move_selected_to_category(self, category):
+        """Move every selected snippet to `category` (one undo entry)."""
+        triggers = self.selected_triggers()
+        if not triggers or not self.daemon or not str(category).strip():
+            return
         category = str(category).strip()
         self._push_undo(f"Move {len(triggers)} snippet(s) to '{category}'")
         for trigger in triggers:
@@ -2002,6 +2233,18 @@ class TexterUI(QMainWindow):
         self.statusBar().showMessage(
             f"Moved {len(triggers)} snippet(s) to '{category}'", 3000
         )
+
+    def prompt_move_to_new_category(self):
+        """Ask for a (possibly new, possibly nested) category, then move."""
+        if not self.daemon:
+            return
+        categories = self.daemon.get_categories() if hasattr(self.daemon, "get_categories") else []
+        category, ok = QInputDialog.getItem(
+            self, "Move to category", "Move selected snippets to category:",
+            list(categories), 0, True,
+        )
+        if ok and str(category).strip():
+            self.move_selected_to_category(str(category).strip())
 
     def bulk_delete(self):
         """Delete every selected snippet (to Trash) after one confirmation."""
@@ -2068,9 +2311,14 @@ class TexterUI(QMainWindow):
         def _wrap(match):
             name = match.group(1)
             # Choice placeholders (group 1 is None) are always
-            # resolvable: orange, never the missing red.
+            # resolvable: orange, never the missing red. Missing
+            # placeholders are links: clicking one in the raw preview
+            # fills it in (item 7).
             color = "#ff9a3c" if name is None or name not in missing else "#f38ba8"
-            return f'<b><font color="{color}">{html.escape(match.group(0))}</font></b>'
+            inner = f'<b><font color="{color}">{html.escape(match.group(0))}</font></b>'
+            if name is not None and name in missing:
+                return f'<a href="fill:{name}">{inner}</a>'
+            return inner
 
         body = re.sub(
             r"\{choice:[^}]+\}|\{([A-Za-z_][A-Za-z0-9_]*)(?:[+-]\d+)?\}",
@@ -2093,9 +2341,12 @@ class TexterUI(QMainWindow):
             self.preview_text.setPlainText(self._preview_rendered_text)
         missing = self._preview_missing_names(self._preview_raw_text)
         if missing and hasattr(self, "preview_missing_label"):
+            _hint = ""
+            if self._preview_mode != "raw":
+                _hint = " Switch to raw text and click a red placeholder to fill it."
             self.preview_missing_label.setText(
                 "Missing settings: " + ", ".join(f"{{{n}}}" for n in missing)
-                + " - no value set; expansion will prompt for them."
+                + " - no value set; expansion will prompt for them." + _hint
             )
             self.preview_missing_label.setStyleSheet("color: #f38ba8;")
         elif hasattr(self, "preview_missing_label"):
@@ -2105,6 +2356,37 @@ class TexterUI(QMainWindow):
             self.preview_mode_btn.setText(
                 "Show rendered" if self._preview_mode == "raw" else "Show raw text"
             )
+
+    def _fill_placeholder_from_preview(self, url):
+        """Anchor click in the raw preview: fill one missing placeholder."""
+        name = url.toString()
+        if name.startswith("fill:"):
+            self._fill_placeholder_value(name[len("fill:"):])
+
+    def _fill_placeholder_value(self, name):
+        """Prompt for one placeholder value and save it as a setting."""
+        if not name or not self.daemon or not hasattr(self, "user_settings_table"):
+            return
+        current = ""
+        row = None
+        for _r in range(self.user_settings_table.rowCount()):
+            _item = self.user_settings_table.item(_r, 0)
+            if _item is not None and _item.text().strip() == name:
+                row = _r
+                _val = self.user_settings_table.item(_r, 1)
+                current = _val.text() if _val else ""
+                break
+        value, ok = QInputDialog.getText(
+            self, "Fill placeholder", f"Value for {{{name}}}:", QLineEdit.Normal, current
+        )
+        if not ok:
+            return
+        if row is None:
+            row = self.add_user_setting_row(name, value)
+        else:
+            self.user_settings_table.setItem(row, 1, QTableWidgetItem(value))
+        self.save_user_config()
+        self.refresh_user_setting_usage()
 
     # ----- Library health, backup, columns, CSV, categories/tags -----
 
@@ -2344,6 +2626,11 @@ class TexterUI(QMainWindow):
     def _refresh_snippet_table(self, items, selected_before):
         """Fill the table with (trigger, snippet) pairs, keeping sort/selection."""
         _query = self._search_query()
+        _highlight_query = (
+            _query
+            if not (getattr(self, "_search_regex", False) or getattr(self, "_search_case_sensitive", False))
+            else ""
+        )
         table = self.snippet_table
         header = table.horizontalHeader()
         sort_section = header.sortIndicatorSection()
@@ -2377,7 +2664,7 @@ class TexterUI(QMainWindow):
                 # Search-match highlighting (item 2): matched cells are
                 # bold with a subtle tint, so a match is visible at a
                 # glance without losing the cell's own text.
-                if _query and _query in str(text).lower():
+                if _highlight_query and _highlight_query in str(text).lower():
                     _font = cell.font()
                     _font.setBold(True)
                     cell.setFont(_font)
@@ -2427,7 +2714,7 @@ class TexterUI(QMainWindow):
         selected_category = self.category_combo.currentText()
         snippets = self.daemon.get_snippets_by_category(selected_category)
 
-        query = self.search_input.text().strip().lower()
+        query = self.search_input.text().strip()
         items = [
             (trigger, snippet)
             for trigger, snippet in snippets.items()
@@ -2436,8 +2723,16 @@ class TexterUI(QMainWindow):
         ]
         self._sort_items(items)
         # The tree delegate reads this for search-match bolding (item 2).
-        self.snippet_list._search_query = query
+        self.snippet_list._search_query = (
+            query.lower()
+            if query and not self._search_regex and not self._search_case_sensitive
+            else ""
+        )
         self._update_filter_status(len(items), len(snippets))
+        if getattr(self, "_search_regex_error", None):
+            self.statusBar().showMessage(
+                f"Invalid regex ({self._search_regex_error}) \u2014 plain-text search used", 4000
+            )
         self._last_filtered_items = list(items)
         self._update_health_status()
 
@@ -2445,6 +2740,7 @@ class TexterUI(QMainWindow):
             self._refresh_snippet_table(items, selected_before)
             self.refresh_user_setting_usage()
             self._sync_values_section_visibility()
+            self._apply_display_prefs()
             return
 
         group_mode = self.group_combo.currentData()
@@ -2493,28 +2789,77 @@ class TexterUI(QMainWindow):
                 self.snippet_list.setCurrentItem(item)
         self.refresh_user_setting_usage()
         self._sync_values_section_visibility()
+        self._apply_display_prefs()
 
     def _matches_search(self, trigger, snippet, query):
-        """True if the trigger, tags, or any expansion text contains the query."""
+        """True if the trigger, tags, note, or expansion text matches the query.
+
+        Plain mode is a case-insensitive substring search (case-sensitive
+        when the Aa toggle is on). Regex mode uses the compiled pattern
+        from _get_search_pattern; an invalid pattern falls back to a plain
+        substring search and _search_regex_error names the problem.
+        """
         if not query:
             return True
-        if query in trigger.lower():
-            return True
-        tags = " ".join(snippet.get("tags") or []).lower()
-        if query in tags:
-            return True
-        if query in str(snippet.get("note", "")).lower():
-            return True
+        fields = [
+            trigger,
+            " ".join(snippet.get("tags") or []),
+            str(snippet.get("note", "")),
+        ]
         snippet_type = snippet.get("type", "variable")
         if snippet_type == "variable":
-            haystack = snippet.get("value", "")
+            fields.append(snippet.get("value", ""))
         elif snippet_type == "template":
-            haystack = " ".join(str(v) for v in snippet.get("languages", {}).values())
+            fields.append(" ".join(str(v) for v in snippet.get("languages", {}).values()))
         elif snippet_type == "command":
-            haystack = snippet.get("action", "")
-        else:
-            haystack = ""
-        return query in haystack.lower()
+            fields.append(snippet.get("action", ""))
+        pattern = self._get_search_pattern(query)
+        if pattern is not None:
+            return any(pattern.search(f or "") for f in fields)
+        case_sensitive = getattr(self, "_search_case_sensitive", False)
+        needle = query if case_sensitive else query.lower()
+        for field in fields:
+            haystack = field or ""
+            if not case_sensitive:
+                haystack = haystack.lower()
+            if needle in haystack:
+                return True
+        return False
+
+    def _get_search_pattern(self, query):
+        """Compiled regex for the current search, or None for plain matching.
+
+        The compile is cached per (query, regex, case) triple, so a refresh
+        over the whole library compiles at most once. An invalid pattern
+        leaves _search_regex_error set and matching falls back to plain.
+        """
+        key = (
+            query,
+            getattr(self, "_search_regex", False),
+            getattr(self, "_search_case_sensitive", False),
+        )
+        if getattr(self, "_search_pattern_key", None) != key:
+            self._search_pattern_key = key
+            self._search_pattern_cache = None
+            self._search_regex_error = None
+            if key[1]:
+                flags = 0 if key[2] else re.IGNORECASE
+                try:
+                    self._search_pattern_cache = re.compile(query, flags)
+                except re.error as exc:
+                    self._search_regex_error = str(exc)
+        return self._search_pattern_cache
+
+    def _on_search_mode_changed(self, checked=None):
+        """Regex / case toggle flipped: re-run the search with the new mode."""
+        self._search_regex = bool(
+            getattr(self, "search_regex_btn", None) and self.search_regex_btn.isChecked()
+        )
+        self._search_case_sensitive = bool(
+            getattr(self, "search_case_btn", None) and self.search_case_btn.isChecked()
+        )
+        self._search_regex_error = None
+        self.refresh_snippet_list()
 
     def _sort_items(self, items):
         """Sort (trigger, snippet) pairs by the selected sort mode, in place."""
@@ -2657,6 +3002,7 @@ class TexterUI(QMainWindow):
         star = "\u2605 " if snippet.get("favorite") else ""
         item = QTreeWidgetItem(parent, [f"{star}{trigger} \u2022 {usage_text}"])
         item.setData(0, Qt.UserRole, trigger)
+        item.setSizeHint(0, QSize(0, 22 if getattr(self, "_density", "comfortable") == "compact" else 28))
         snippet_type = snippet.get("type", "variable")
         category = snippet.get("category", "uncategorized")
         enabled = snippet.get("enabled", True)
