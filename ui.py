@@ -87,6 +87,7 @@ class TexterUI(QMainWindow):
         self._quick_filter = "all"
         self._density = "comfortable"
         self._text_size = "medium"
+        self._right_min_height = 0
         self._search_regex = False
         self._search_case_sensitive = False
         self._search_regex_error = None
@@ -200,6 +201,11 @@ class TexterUI(QMainWindow):
             self.save_user_config()
             return self._settings_snapshot() == self._settings_baseline
         return True
+
+    def resizeEvent(self, event):
+        """Window resized: re-measure the all-expanded panel height."""
+        super().resizeEvent(event)
+        self._sync_right_content_height()
 
     def closeEvent(self, event):
         if not (hasattr(self, "really_quit") and self.really_quit):
@@ -1221,6 +1227,7 @@ class TexterUI(QMainWindow):
 
         # Right panel: Details + Language selector
         right_group = QGroupBox("Settings")
+        self.right_group = right_group
         right_layout = QVBoxLayout(right_group)
 
         # Language selector
@@ -1461,6 +1468,10 @@ class TexterUI(QMainWindow):
         right_layout.addWidget(self.values_toggle_btn)
         right_layout.addWidget(values_group)
         right_layout.addWidget(self.save_settings_btn)
+        # Bottom stretch: when sections are folded, the spare space
+        # in the fixed-height panel collects here instead of
+        # stretching the preview box or the Placeholder values table.
+        right_layout.addStretch(1)
 
 
         # Bottom controls, grouped by intent instead of two flat rows of
@@ -1802,6 +1813,7 @@ class TexterUI(QMainWindow):
             self._sync_values_section_visibility()
         else:
             group.setVisible(bool(checked))
+        self._sync_right_content_height()
 
     def _sync_values_section_visibility(self):
         """Placeholder values is snippet settings: show it only when a snippet is selected.
@@ -1886,6 +1898,49 @@ class TexterUI(QMainWindow):
             self.setStyleSheet(f"QWidget {{ font-size: {px}px; }}")
         except Exception:
             pass
+        self._sync_right_content_height()
+
+    def _all_expanded_content_height(self):
+        """Height of the Settings panel with all three sections expanded.
+
+        The layout's totalSizeHint excludes hidden groups, so a folded
+        group's sizeHint (still valid while hidden, as the probe in
+        testing showed) is added back with one spacing, giving the
+        all-expanded height in any fold state and at any window width.
+        """
+        group = getattr(self, "right_group", None)
+        layout = group.layout() if group is not None else None
+        if layout is None:
+            return 0
+        height = layout.totalSizeHint().height()
+        spacing = layout.spacing()
+        for section in (
+            getattr(self, "details_group", None),
+            getattr(self, "prefs_group", None),
+            getattr(self, "values_group", None),
+        ):
+            if section is not None and section.isHidden():
+                height += section.sizeHint().height() + spacing
+        return height
+
+    def _sync_right_content_height(self):
+        """Keep the containing area at its all-expanded height.
+
+        The Settings panel gets a minimum height equal to the
+        all-expanded content height, so folding a section never
+        shrinks the panel or stretches the widgets inside it. The
+        minimum only ever prevents shrinking: taller content (more
+        placeholder rows, a narrower window) still grows the panel
+        and scrolls as before. Recomputed on every sync so width
+        changes (word wrap) are picked up.
+        """
+        group = getattr(self, "right_group", None)
+        if group is None:
+            return
+        height = self._all_expanded_content_height()
+        if height > 0:
+            self._right_min_height = height
+            group.setMinimumHeight(height)
 
     def _focus_search(self):
         """Ctrl+F: focus the search box and select its contents."""
@@ -3076,6 +3131,7 @@ class TexterUI(QMainWindow):
     def on_selection_changed(self):
         self._sync_bulk_bar()
         self._sync_values_section_visibility()
+        self._sync_right_content_height()
         trigger = self.selected_trigger()
         if not trigger or not self.daemon:
             self._clear_preview()
