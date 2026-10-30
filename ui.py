@@ -2896,6 +2896,7 @@ class TexterUI(QMainWindow):
             "preferences": (self.prefs_toggle_btn, prefs_group, "Preferences"),
             "values": (self.values_toggle_btn, values_group, "Placeholder values"),
         }
+        self._values_manual_show = False
         right_layout.addWidget(self.details_toggle_btn)
         right_layout.addWidget(details_group)
         right_layout.addWidget(self.prefs_toggle_btn)
@@ -3237,6 +3238,8 @@ class TexterUI(QMainWindow):
         arrow = "\u25be" if checked else "\u25b8"
         btn.setText(f"{arrow} {title}")
         if group is getattr(self, "values_group", None):
+            if self.selected_trigger() is None:
+                self._values_manual_show = bool(checked)
             self._sync_values_section_visibility()
         else:
             group.setVisible(bool(checked))
@@ -3245,17 +3248,21 @@ class TexterUI(QMainWindow):
         """Placeholder values is snippet settings: show it only when a snippet is selected.
 
         Your details and Preferences are global and keep their own fold
-        state. The toggle header is hidden too with no selection, so the
-        section does not look half-present on launch; a saved folded state
-        still wins once a snippet is selected.
+        state. The header stays visible with no selection, so the section
+        stays findable, and unfolding it with nothing selected opens it
+        anyway (a manual override, cleared on the next selection). A saved
+        folded state still wins once a snippet is selected.
         """
         group = getattr(self, "values_group", None)
         btn = getattr(self, "values_toggle_btn", None)
         if group is None or btn is None:
             return
         has_selection = self.selected_trigger() is not None
-        btn.setVisible(has_selection)
-        group.setVisible(has_selection and btn.isChecked())
+        if has_selection:
+            self._values_manual_show = False
+        btn.setVisible(True)
+        manual = getattr(self, "_values_manual_show", False)
+        group.setVisible(btn.isChecked() and (has_selection or manual))
 
     def _focus_search(self):
         """Ctrl+F: focus the search box and select its contents."""
