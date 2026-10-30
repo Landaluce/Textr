@@ -92,6 +92,27 @@ dark_stylesheet = """
         background-color: #2e2e38;
         border: 1px solid #ff9a3c;
     }
+    /* Quick-filter chips: small, checkable; the active chip is orange. */
+    QPushButton#filter_chip {
+        padding: 4px 10px;
+        font-weight: normal;
+    }
+    QPushButton#filter_chip:checked {
+        background-color: #ff9a3c;
+        color: #11111b;
+        border: 1px solid #ff9a3c;
+        font-weight: bold;
+    }
+    /* Save Settings when edited but unsaved: orange outline + text. */
+    QPushButton#save_settings_dirty {
+        border: 1px solid #ff9a3c;
+        color: #ff9a3c;
+    }
+    /* Right-panel scroll area: no frame, same dark background. */
+    QScrollArea {
+        background-color: #0b0b0e;
+        border: none;
+    }
     /* Primary action (Quick Insert): the one orange button, so it reads
        as the main action rather than one of many equal buttons. */
     QPushButton#primary_btn {

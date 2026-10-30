@@ -1,5 +1,6 @@
 # texter_mvp/ui.py
 import sys
+import html
 import json
 import threading
 import re
@@ -12,9 +13,9 @@ from PySide6.QtWidgets import (
     QCheckBox, QTreeWidget, QTreeWidgetItem, QAbstractItemView,
     QStyledItemDelegate, QStyle, QStyleOptionViewItem,
     QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox,
-    QRadioButton
+    QRadioButton, QScrollArea, QFrame, QInputDialog
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect
+from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect, QSettings
 from PySide6.QtGui import (
     QIcon, QAction, QPixmap, QPainter, QColor, QPalette, QPainterPath,
     QShortcut, QKeySequence,
@@ -81,6 +82,16 @@ class SnippetTreeDelegate(QStyledItemDelegate):
         if selected:
             option.palette.setColor(QPalette.Text, self.SELECT_FG)
             option.palette.setColor(QPalette.HighlightedText, self.SELECT_FG)
+        # Search-match highlighting: a row whose text contains the
+        # manager's current search query is drawn bold, so matches stand
+        # out without losing the type colour / selection colours above.
+        query = getattr(option.widget, "_search_query", "") if option.widget is not None else ""
+        if query:
+            text = index.data(Qt.DisplayRole)
+            if text and query in str(text).lower():
+                font = option.font
+                font.setBold(True)
+                option.font = font
 
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
@@ -204,10 +215,16 @@ class SnippetTreeWidget(QTreeWidget):
 
 
 class AddSnippetDialog(QDialog):
-    def __init__(self, parent=None, snippet=None, categories=None):
+    def __init__(self, parent=None, snippet=None, categories=None, daemon=None):
         super().__init__(parent)
         self.snippet = snippet
         self.categories = categories or []
+        # Daemon (for rendering the live preview and checking settings):
+        # explicit argument wins, otherwise the parent window's daemon.
+        self.daemon = daemon
+        if self.daemon is None and parent is not None:
+            self.daemon = getattr(parent, "daemon", None)
+        self.original_trigger = snippet.get("trigger") if isinstance(snippet, dict) else None
         self.setup_ui()
 
     def setup_ui(self):
@@ -280,6 +297,18 @@ class AddSnippetDialog(QDialog):
                 self.action_input.setText(self.snippet.get("action", ""))
                 self.command_value_input.setText(self.snippet.get("value", ""))
 
+        # Live preview + warnings: rendered expansion and trigger /
+        # missing-setting warnings, updated as the user types (see
+        # _update_live_preview). Placed before the buttons so it is
+        # visible while editing, not hidden below them.
+        self.live_preview = QTextEdit()
+        self.live_preview.setReadOnly(True)
+        self.live_preview.setFixedHeight(60)
+        layout.addRow("Live preview:", self.live_preview)
+        self.warning_label = QLabel("")
+        self.warning_label.setWordWrap(True)
+        layout.addRow(self.warning_label)
+
         # Buttons
         btn_layout = QHBoxLayout()
         self.save_btn = QPushButton("Save")
@@ -293,10 +322,114 @@ class AddSnippetDialog(QDialog):
         # variable; edit flows call on_type_changed again with their type).
         self.on_type_changed(self.type_combo.currentText())
 
+        # Live preview: refresh on every keystroke in the fields that
+        # feed the expansion, and on type switches.
+        self.trigger_input.textChanged.connect(self._update_live_preview)
+        self.value_input.textChanged.connect(self._update_live_preview)
+        self.languages_input.textChanged.connect(self._update_live_preview)
+        self.action_input.textChanged.connect(self._update_live_preview)
+        self.command_value_input.textChanged.connect(self._update_live_preview)
+        self.type_combo.currentTextChanged.connect(self._update_live_preview)
+        self._update_live_preview()
+
     def on_type_changed(self, type_val):
         self.languages_input.setHidden(type_val != "template")
         self.action_input.setHidden(type_val != "command")
         self.command_value_input.setHidden(type_val != "command")
+
+    def _raw_expansion_text(self):
+        """(raw text, json_error) for the type currently being edited."""
+        snippet_type = self.type_combo.currentText()
+        if snippet_type == "variable":
+            return self.value_input.toPlainText(), False
+        if snippet_type == "template":
+            raw_json = self.languages_input.toPlainText().strip()
+            if not raw_json:
+                return "", False
+            try:
+                langs = json.loads(raw_json)
+            except json.JSONDecodeError:
+                return "", True
+            if not isinstance(langs, dict):
+                return "", True
+            current = getattr(self.daemon, "current_language", None) if self.daemon else None
+            if current in langs:
+                lang = current
+            elif "python" in langs:
+                lang = "python"
+            elif langs:
+                lang = next(iter(langs))
+            else:
+                lang = None
+            return (str(langs.get(lang, "")) if lang else ""), False
+        action = self.action_input.text().strip()
+        value = self.command_value_input.text().strip()
+        return f"Command: {action}" + (f" ({value})" if value else ""), False
+
+    def _missing_placeholders(self, raw):
+        """Placeholder names in `raw` with no built-in and no saved value."""
+        if self.daemon is None:
+            return []
+        names = re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)(?:[+-]\d+)?\}", raw or "")
+        builtins = set(TexterUI.BUILTIN_PLACEHOLDERS) | {"cursor"}
+        settings = {}
+        config = getattr(self.daemon, "config", None)
+        if isinstance(config, dict):
+            settings = config.get("user_settings", {}) or {}
+        return sorted(
+            {n for n in names if n not in builtins and not str(settings.get(n, "")).strip()}
+        )
+
+    def _update_live_preview(self, *args):
+        """Refresh the live preview, warnings, and Save availability."""
+        if not hasattr(self, "live_preview"):
+            return
+        raw, json_error = self._raw_expansion_text()
+        snippet_type = self.type_combo.currentText()
+        if json_error:
+            preview = "(Invalid JSON for programming languages)"
+        elif snippet_type == "command":
+            preview = raw
+        elif self.daemon is not None and hasattr(self.daemon, "render_template"):
+            try:
+                preview = self.daemon.render_template(raw)
+            except Exception:
+                preview = raw
+        else:
+            preview = raw
+        self.live_preview.setPlainText(preview)
+
+        warnings = []
+        trigger = self.trigger_input.text().strip()
+        if not trigger:
+            warnings.append("Trigger is required.")
+        else:
+            conflicts = None
+            window = self.parent()
+            if window is not None and hasattr(window, "trigger_conflicts"):
+                try:
+                    conflicts = window.trigger_conflicts(trigger, exclude=self.original_trigger)
+                except Exception:
+                    conflicts = None
+            if conflicts is None and self.daemon is not None:
+                others = [t for t in getattr(self.daemon, "snippets", {}) if t != self.original_trigger]
+                conflicts = []
+                if trigger in others:
+                    conflicts.append(f"'{trigger}' already exists - saving will overwrite it.")
+            warnings.extend(conflicts or [])
+        if json_error:
+            warnings.append("Fix the JSON above before saving.")
+        elif snippet_type != "command":
+            missing = self._missing_placeholders(raw)
+            if missing:
+                warnings.append(
+                    "Missing settings: " + ", ".join(f"{{{n}}}" for n in missing)
+                    + " - no value set; expansion will prompt for them."
+                )
+        self.warning_label.setText("\n".join(warnings))
+        self.warning_label.setStyleSheet("color: #f38ba8;" if warnings else "")
+        if hasattr(self, "save_btn"):
+            self.save_btn.setEnabled(bool(trigger) and not json_error)
 
     def get_snippet(self):
         trigger = self.trigger_input.text().strip()
@@ -918,6 +1051,13 @@ class TexterUI(QMainWindow):
             daemon.ui = self
         self.app = None
         self._focus_app = None
+        # UI-improvement state (defaults; setup_ui / refresh fill them in).
+        self._quick_filter = "all"
+        self._preview_mode = "rendered"
+        self._preview_raw_text = ""
+        self._preview_rendered_text = ""
+        self._settings_baseline = None
+        self._app_settings = QSettings("Landaluce", "Textr")
         self.quit_requested.connect(self.quit_app)
         self.daemon_command.connect(self.handle_daemon_command, Qt.QueuedConnection)
         self.prompt_requested.connect(self._handle_prompt_request, Qt.QueuedConnection)
@@ -990,6 +1130,12 @@ class TexterUI(QMainWindow):
         QApplication.quit()
 
     def closeEvent(self, event):
+        # Persist window state (item 1) on every close, including the
+        # quit_app() path, which re-enters here with really_quit set.
+        try:
+            self._save_window_state()
+        except Exception:
+            pass
         if hasattr(self, 'really_quit') and self.really_quit:
             event.accept()
         else:
@@ -1024,6 +1170,7 @@ class TexterUI(QMainWindow):
         self.user_settings_table.setCurrentItem(item)
         self.user_settings_table.setFocus()
         self.user_settings_table.editItem(item)
+        self._update_settings_dirty()
 
     def remove_user_settings(self):
         rows = {
@@ -1032,6 +1179,7 @@ class TexterUI(QMainWindow):
         }
         for row in sorted(rows, reverse=True):
             self.user_settings_table.removeRow(row)
+        self._update_settings_dirty()
 
     def collect_user_settings(self):
         settings = {}
@@ -1483,6 +1631,8 @@ class TexterUI(QMainWindow):
             return
         self.on_selection_changed()
         self.statusBar().showMessage("Settings saved", 3000)
+        self._settings_baseline = self._settings_snapshot()
+        self._update_settings_dirty()
 
     def poll_daemon_status(self):
         if not self.daemon:
@@ -1528,6 +1678,30 @@ class TexterUI(QMainWindow):
         self.search_input.setPlaceholderText("Search triggers or expansion text...")
         self.search_input.textChanged.connect(self.refresh_snippet_list)
         left_layout.addWidget(self.search_input)
+
+        # Quick filters (item 2): one-tap filters above the list.
+        # Clicking the active chip again clears back to All.
+        self._filter_buttons = {}
+        filter_layout = QHBoxLayout()
+        for _key, _label in (
+            ("all", "All"),
+            ("favourites", "\u2605 Favourites"),
+            ("variable", "Variable"),
+            ("template", "Template"),
+            ("command", "Command"),
+            ("disabled", "Disabled"),
+            ("unused", "Never used"),
+        ):
+            _btn = QPushButton(_label)
+            _btn.setObjectName("filter_chip")
+            _btn.setCheckable(True)
+            _btn.setChecked(_key == self._quick_filter)
+            _btn.clicked.connect(lambda _c, k=_key: self._set_quick_filter(k))
+            filter_layout.addWidget(_btn)
+            self._filter_buttons[_key] = _btn
+        left_layout.addLayout(filter_layout)
+        self.filter_count_label = QLabel("")
+        left_layout.addWidget(self.filter_count_label)
 
         # Grouping and sort controls
         view_layout = QHBoxLayout()
@@ -1596,8 +1770,11 @@ class TexterUI(QMainWindow):
         self.snippet_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
+        # ExtendedSelection (item 4): bulk actions act on every selected
+        # row. Single-selection behaviour is preserved for the tree,
+        # where drag-and-drop and current-item logic assume one item.
         self.snippet_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
+            QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.snippet_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
@@ -1610,6 +1787,10 @@ class TexterUI(QMainWindow):
         self.snippet_table.itemSelectionChanged.connect(self.on_selection_changed)
         self.snippet_table.itemDoubleClicked.connect(lambda *args: self.edit_snippet())
         left_layout.addWidget(self.snippet_table)
+        self.empty_state_label = QLabel("")
+        self.empty_state_label.setWordWrap(True)
+        self.empty_state_label.setAlignment(Qt.AlignCenter)
+        left_layout.addWidget(self.empty_state_label)
         self._apply_snippet_view()
 
         # Add/Edit/Delete buttons (shortcuts shown inline in the labels so
@@ -1624,10 +1805,38 @@ class TexterUI(QMainWindow):
         self.delete_btn = QPushButton("Delete (Del)")
         self.delete_btn.setToolTip("Delete the selected snippet")
         self.delete_btn.clicked.connect(self.delete_snippet)
+        self.shortcuts_btn = QPushButton("Shortcuts (?)")
+        self.shortcuts_btn.setToolTip("Show keyboard shortcuts (Ctrl+F focuses search)")
+        self.shortcuts_btn.clicked.connect(self.show_shortcuts)
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.edit_btn)
         btn_layout.addWidget(self.delete_btn)
+        btn_layout.addWidget(self.shortcuts_btn)
         left_layout.addLayout(btn_layout)
+
+        # Bulk-action row (item 4): table view only; hidden in tree view
+        # by _apply_snippet_view().
+        self.bulk_bar = QWidget()
+        bulk_layout = QHBoxLayout(self.bulk_bar)
+        bulk_layout.setContentsMargins(0, 0, 0, 0)
+        bulk_layout.addWidget(QLabel("Bulk:"))
+        self.bulk_enable_btn = QPushButton("Enable")
+        self.bulk_enable_btn.clicked.connect(lambda: self._bulk_update("enable"))
+        self.bulk_disable_btn = QPushButton("Disable")
+        self.bulk_disable_btn.clicked.connect(lambda: self._bulk_update("disable"))
+        self.bulk_favourite_btn = QPushButton("Favourite")
+        self.bulk_favourite_btn.clicked.connect(lambda: self._bulk_update("favourite"))
+        self.bulk_category_btn = QPushButton("Category\u2026")
+        self.bulk_category_btn.clicked.connect(self.bulk_set_category)
+        self.bulk_delete_btn = QPushButton("Delete")
+        self.bulk_delete_btn.clicked.connect(self.bulk_delete)
+        for _b in (
+            self.bulk_enable_btn, self.bulk_disable_btn, self.bulk_favourite_btn,
+            self.bulk_category_btn, self.bulk_delete_btn,
+        ):
+            bulk_layout.addWidget(_b)
+        bulk_layout.addStretch(1)
+        left_layout.addWidget(self.bulk_bar)
 
         # Keyboard shortcuts. Add is window-wide; Edit/Delete are scoped to
         # the tree so typing in the search box (or settings fields) never
@@ -1650,6 +1859,22 @@ class TexterUI(QMainWindow):
         self.delete_shortcut_table = QShortcut(QKeySequence(Qt.Key_Delete), self.snippet_table)
         self.delete_shortcut_table.setContext(Qt.WidgetWithChildrenShortcut)
         self.delete_shortcut_table.activated.connect(self.delete_snippet)
+
+        # Keyboard-first navigation (item 7). Ctrl+F focuses search from
+        # anywhere in the manager; Esc clears it while it has focus;
+        # Ctrl+1 / Ctrl+2 switch Tree / Table without the mouse.
+        self.search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        self.search_shortcut.setContext(Qt.WindowShortcut)
+        self.search_shortcut.activated.connect(self._focus_search)
+        self.clear_search_shortcut = QShortcut(
+            QKeySequence(Qt.Key_Escape), self.search_input
+        )
+        self.clear_search_shortcut.setContext(Qt.WidgetShortcut)
+        self.clear_search_shortcut.activated.connect(self.search_input.clear)
+        for _seq, _view in (("Ctrl+1", "tree"), ("Ctrl+2", "table")):
+            _sc = QShortcut(QKeySequence(_seq), self)
+            _sc.setContext(Qt.WindowShortcut)
+            _sc.activated.connect(lambda v=_view: self._set_view(v))
 
         main_layout.addWidget(left_group, 1)
 
@@ -1694,7 +1919,20 @@ class TexterUI(QMainWindow):
         self.preview_text.setReadOnly(True)
         self.preview_text.setPlaceholderText("Select a template snippet to preview")
         preview_layout.addWidget(self.preview_text)
+        # Missing-placeholder flag (item 5): shown under the preview
+        # whenever the selected snippet uses a placeholder with no
+        # built-in and no saved custom-setting value.
+        self.preview_missing_label = QLabel("")
+        self.preview_missing_label.setWordWrap(True)
+        preview_layout.addWidget(self.preview_missing_label)
         preview_btn_layout = QHBoxLayout()
+        self.preview_mode_btn = QPushButton("Show raw text")
+        self.preview_mode_btn.setToolTip(
+            "Toggle between the rendered expansion and the raw text, "
+            "with {placeholders} highlighted"
+        )
+        self.preview_mode_btn.clicked.connect(self._toggle_preview_mode)
+        preview_btn_layout.addWidget(self.preview_mode_btn)
         self.preview_copy_btn = QPushButton("Copy")
         self.preview_copy_btn.setToolTip("Copy the rendered expansion to the clipboard")
         self.preview_copy_btn.clicked.connect(self.copy_preview)
@@ -1738,6 +1976,14 @@ class TexterUI(QMainWindow):
         self.time_format_edit.setPlaceholderText("%H:%M (strftime)")
         self.save_settings_btn = QPushButton("Save Settings")
         self.save_settings_btn.clicked.connect(self.save_user_config)
+        # Unsaved-changes tracking (item 3): any edit marks the button
+        # dirty until Save Settings is clicked (see _update_settings_dirty).
+        self.name_edit.textChanged.connect(self._update_settings_dirty)
+        self.email_edit.textChanged.connect(self._update_settings_dirty)
+        self.layout_combo.currentIndexChanged.connect(self._update_settings_dirty)
+        self.paste_hotkey_edit.textChanged.connect(self._update_settings_dirty)
+        self.date_format_edit.textChanged.connect(self._update_settings_dirty)
+        self.time_format_edit.textChanged.connect(self._update_settings_dirty)
         settings_layout.addRow("Name:", self.name_edit)
         settings_layout.addRow("Email:", self.email_edit)
         settings_layout.addRow("Keyboard layout:", self.layout_combo)
@@ -1759,6 +2005,7 @@ class TexterUI(QMainWindow):
         )
         self.user_settings_table.setSortingEnabled(True)
         self.user_settings_table.setMinimumHeight(140)
+        self.user_settings_table.itemChanged.connect(self._update_settings_dirty)
         settings_layout.addRow("Custom settings:", self.user_settings_table)
 
         custom_buttons = QHBoxLayout()
@@ -1852,7 +2099,14 @@ class TexterUI(QMainWindow):
 
         # Snippets and Settings panels share the window 50/50
         # (left_group already has stretch 1, so this matches it).
-        main_layout.addWidget(right_group, 1)
+        # The right panel lives in a scroll area (item 3): language,
+        # preview, profile, and custom settings stacked in a fixed-height
+        # panel otherwise overflow at smaller window heights.
+        self.right_scroll = QScrollArea()
+        self.right_scroll.setWidgetResizable(True)
+        self.right_scroll.setFrameShape(QFrame.NoFrame)
+        self.right_scroll.setWidget(right_group)
+        main_layout.addWidget(self.right_scroll, 1)
 
         # System Tray Icon Setup
         self.really_quit = False
@@ -1886,15 +2140,28 @@ class TexterUI(QMainWindow):
         self.status_timer.start(500)
         self.last_enabled_state = self.daemon.enabled if self.daemon else True
 
+        self._restore_window_state()
+        self._apply_snippet_view()
         self.refresh_snippet_list()
         self.find_missing_user_settings(notify=False)
+        self._settings_baseline = self._settings_snapshot()
+        self._update_settings_dirty()
 
     def get_expansion_preview(self, snippet):
         if not self.daemon:
             return ""
         snippet_type = snippet.get("type", "variable")
         if snippet_type == "variable":
-            return snippet.get("value", "")
+            # Rendered, not raw: placeholders ({name}, custom settings,
+            # relative dates) resolve here, as they do for templates,
+            # so the preview (and the table Preview column) shows what
+            # will actually expand. Missing placeholders render
+            # literally, as in render_template without a prompt handler.
+            raw = snippet.get("value", "")
+            try:
+                return self.daemon.render_template(raw)
+            except Exception:
+                return raw
         elif snippet_type == "template":
             current_lang = self.language_combo.currentText()
             raw = snippet.get("languages", {}).get(current_lang)
@@ -1915,6 +2182,10 @@ class TexterUI(QMainWindow):
         is_table = self._is_table_view()
         self.snippet_list.setVisible(not is_table)
         self.snippet_table.setVisible(is_table)
+        # Bulk actions are a table feature (multi-select); hide the row
+        # in tree view, where selection is single-item.
+        if hasattr(self, "bulk_bar"):
+            self.bulk_bar.setVisible(is_table)
         self.group_combo.setEnabled(not is_table)
         self.subgroup_combo.setEnabled(
             not is_table and self.group_combo.currentData() != "none"
@@ -1924,6 +2195,344 @@ class TexterUI(QMainWindow):
         """View switcher: show the chosen view and rebuild it."""
         self._apply_snippet_view()
         self.refresh_snippet_list()
+
+    # ----- UI improvements: window state, filters, bulk, preview, shortcuts -----
+
+    def _focus_search(self):
+        """Ctrl+F: focus the search box and select its contents."""
+        if hasattr(self, "search_input"):
+            self.search_input.setFocus()
+            self.search_input.selectAll()
+
+    def _set_view(self, view):
+        """Switch Tree/Table from a keyboard shortcut (Ctrl+1 / Ctrl+2)."""
+        idx = self.view_combo.findData(view)
+        if idx >= 0:
+            self.view_combo.setCurrentIndex(idx)
+
+    def show_shortcuts(self):
+        """Keyboard-shortcut help dialog (item 7)."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Keyboard shortcuts")
+        dialog.setMinimumWidth(420)
+        layout = QVBoxLayout(dialog)
+        lines = [
+            "Ctrl+N — Add snippet",
+            "F2 / Enter — Edit selected snippet",
+            "Delete — Delete selected snippet (to Trash)",
+            "Ctrl+F — Focus search",
+            "Esc — Clear search (while search has focus)",
+            "Ctrl+1 / Ctrl+2 — Tree view / Table view",
+            "Ctrl+Alt+Space — Quick Insert (anywhere)",
+            "",
+            "Closing the manager window quits Textr; the tray menu also has Quit.",
+        ]
+        label = QLabel("\n".join(lines))
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        dialog.exec()
+
+    def _search_query(self):
+        """Current search text, lowercased, or '' if the box is not built yet."""
+        if hasattr(self, "search_input"):
+            return self.search_input.text().strip().lower()
+        return ""
+
+    def _set_quick_filter(self, key):
+        """Apply a quick-filter chip; clicking the active chip clears to All."""
+        if key == self._quick_filter and key != "all":
+            key = "all"
+        self._quick_filter = key
+        for _k, _btn in getattr(self, "_filter_buttons", {}).items():
+            _btn.setChecked(_k == key)
+        self.refresh_snippet_list()
+
+    def _matches_quick_filter(self, trigger, snippet):
+        """True if a snippet passes the active quick-filter chip."""
+        mode = getattr(self, "_quick_filter", "all")
+        if mode == "all":
+            return True
+        if mode == "favourites":
+            return bool(snippet.get("favorite"))
+        if mode in ("variable", "template", "command"):
+            return snippet.get("type", "variable") == mode
+        if mode == "disabled":
+            return not snippet.get("enabled", True)
+        if mode == "unused":
+            return int(snippet.get("usage", 0) or 0) == 0
+        return True
+
+    def _update_filter_status(self, shown, total):
+        """Result count + empty-state label for the current search/filter."""
+        if hasattr(self, "filter_count_label"):
+            if total == 0:
+                self.filter_count_label.setText("No snippets")
+            elif shown == total:
+                self.filter_count_label.setText(f"{total} snippet(s)")
+            else:
+                self.filter_count_label.setText(f"Showing {shown} of {total} snippet(s)")
+        if hasattr(self, "empty_state_label"):
+            if shown == 0:
+                if self._search_query() or getattr(self, "_quick_filter", "all") != "all":
+                    self.empty_state_label.setText(
+                        "No snippets match the current search or filters.\nClear the search or choose All."
+                    )
+                else:
+                    self.empty_state_label.setText(
+                        "No snippets yet.\nAdd your first snippet with Add (Ctrl+N)."
+                    )
+                self.empty_state_label.setVisible(True)
+            else:
+                self.empty_state_label.setVisible(False)
+
+    def _save_window_state(self):
+        """Persist geometry, view/group/sort, and column widths (item 1)."""
+        settings = self._app_settings
+        settings.setValue("geometry", self.saveGeometry())
+        settings.setValue("view", self.view_combo.currentData())
+        settings.setValue("group", self.group_combo.currentData())
+        settings.setValue("subgroup", self.subgroup_combo.currentData())
+        settings.setValue("sort", self.sort_combo.currentData())
+        settings.setValue(
+            "tableColumnWidths",
+            [self.snippet_table.columnWidth(c) for c in range(self.snippet_table.columnCount())],
+        )
+        settings.setValue(
+            "settingsColumnWidths",
+            [self.user_settings_table.columnWidth(c) for c in range(self.user_settings_table.columnCount())],
+        )
+        settings.sync()
+
+    def _restore_window_state(self):
+        """Restore the persisted window state, falling back to defaults."""
+        settings = self._app_settings
+        geometry = settings.value("geometry")
+        if geometry is not None:
+            try:
+                self.restoreGeometry(geometry)
+            except Exception:
+                pass
+        for _attr, _key in (
+            ("view_combo", "view"),
+            ("group_combo", "group"),
+            ("subgroup_combo", "subgroup"),
+            ("sort_combo", "sort"),
+        ):
+            combo = getattr(self, _attr, None)
+            data = settings.value(_key)
+            if combo is not None and data is not None:
+                idx = combo.findData(data)
+                if idx < 0:
+                    idx = combo.findData(str(data))
+                if idx >= 0:
+                    combo.blockSignals(True)
+                    combo.setCurrentIndex(idx)
+                    combo.blockSignals(False)
+        for _table, _key in (
+            (getattr(self, "snippet_table", None), "tableColumnWidths"),
+            (getattr(self, "user_settings_table", None), "settingsColumnWidths"),
+        ):
+            if _table is None:
+                continue
+            widths = settings.value(_key)
+            if isinstance(widths, (list, tuple)) and len(widths) == _table.columnCount():
+                for _c, _w in enumerate(widths):
+                    try:
+                        _w = int(_w)
+                    except (TypeError, ValueError):
+                        continue
+                    if _w > 0:
+                        _table.setColumnWidth(_c, _w)
+
+    def _settings_snapshot(self):
+        """Raw settings-field values, for unsaved-change detection (item 3)."""
+        rows = []
+        table = getattr(self, "user_settings_table", None)
+        if table is not None:
+            for _r in range(table.rowCount()):
+                _k = table.item(_r, 0)
+                _v = table.item(_r, 1)
+                rows.append((_k.text() if _k else "", _v.text() if _v else ""))
+        layout_data = self.layout_combo.currentData() if hasattr(self, "layout_combo") else None
+        return (
+            self.name_edit.text() if hasattr(self, "name_edit") else "",
+            self.email_edit.text() if hasattr(self, "email_edit") else "",
+            layout_data,
+            self.paste_hotkey_edit.text() if hasattr(self, "paste_hotkey_edit") else "",
+            self.date_format_edit.text() if hasattr(self, "date_format_edit") else "",
+            self.time_format_edit.text() if hasattr(self, "time_format_edit") else "",
+            tuple(rows),
+        )
+
+    def _update_settings_dirty(self, *args):
+        """Mark Save Settings dirty (with a bullet) until it is saved."""
+        if getattr(self, "_settings_baseline", None) is None:
+            return
+        if not hasattr(self, "save_settings_btn"):
+            return
+        dirty = self._settings_snapshot() != self._settings_baseline
+        self.save_settings_btn.setText("Save Settings \u2022" if dirty else "Save Settings")
+        self.save_settings_btn.setObjectName("save_settings_dirty" if dirty else "")
+        try:
+            _style = self.save_settings_btn.style()
+            _style.unpolish(self.save_settings_btn)
+            _style.polish(self.save_settings_btn)
+        except Exception:
+            pass
+
+    def selected_triggers(self):
+        """Triggers of every selected snippet (table multi-select aware)."""
+        if self._is_table_view() and hasattr(self, "snippet_table"):
+            triggers = []
+            seen = set()
+            for _index in self.snippet_table.selectedIndexes():
+                item = self.snippet_table.item(_index.row(), 0)
+                if item is None:
+                    continue
+                trigger = item.data(Qt.UserRole + 1)
+                if trigger is not None and trigger not in seen:
+                    seen.add(trigger)
+                    triggers.append(trigger)
+            return triggers
+        trigger = self.selected_trigger()
+        return [trigger] if trigger else []
+
+    def _bulk_update(self, action):
+        """Enable / disable / favourite every selected snippet (item 4)."""
+        triggers = self.selected_triggers()
+        if not triggers or not self.daemon:
+            return
+        for trigger in triggers:
+            snippet = dict(self.daemon.snippets.get(trigger, {}))
+            if action == "enable":
+                snippet["enabled"] = True
+            elif action == "disable":
+                snippet["enabled"] = False
+            elif action == "favourite":
+                snippet["favorite"] = True
+            self.daemon.add_or_update_snippet(trigger, snippet)
+        self.refresh_snippet_list()
+        self.statusBar().showMessage(f"Updated {len(triggers)} snippet(s)", 3000)
+
+    def bulk_set_category(self):
+        """Move every selected snippet to one chosen category."""
+        triggers = self.selected_triggers()
+        if not triggers or not self.daemon:
+            return
+        categories = self.daemon.get_categories() if hasattr(self.daemon, "get_categories") else []
+        category, ok = QInputDialog.getItem(
+            self, "Bulk category", "Move selected snippets to category:",
+            list(categories), 0, True,
+        )
+        if not ok or not str(category).strip():
+            return
+        category = str(category).strip()
+        for trigger in triggers:
+            snippet = dict(self.daemon.snippets.get(trigger, {}))
+            snippet["category"] = category
+            self.daemon.add_or_update_snippet(trigger, snippet)
+        self.refresh_snippet_list()
+        self.statusBar().showMessage(
+            f"Moved {len(triggers)} snippet(s) to '{category}'", 3000
+        )
+
+    def bulk_delete(self):
+        """Delete every selected snippet (to Trash) after one confirmation."""
+        triggers = self.selected_triggers()
+        if not triggers or not self.daemon:
+            return
+        preview = ", ".join(repr(t) for t in triggers[:10])
+        if len(triggers) > 10:
+            preview += f", ... ({len(triggers)} total)"
+        reply = QMessageBox.question(
+            self, "Confirm",
+            f"Delete {len(triggers)} snippet(s)?\n\n{preview}\n\nThey will be moved to Trash.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        for trigger in triggers:
+            self.daemon.delete_snippet(trigger)
+        self.refresh_snippet_list()
+        self.statusBar().showMessage(
+            f"{len(triggers)} snippet(s) moved to Trash (restore from Trash)", 4000
+        )
+
+    def _raw_expansion(self, snippet):
+        """Expansion text before placeholder rendering (item 5, raw mode)."""
+        snippet_type = snippet.get("type", "variable")
+        if snippet_type == "variable":
+            return snippet.get("value", "")
+        if snippet_type == "template":
+            current_lang = self.language_combo.currentText() if hasattr(self, "language_combo") else "python"
+            raw = (snippet.get("languages", {}) or {}).get(current_lang)
+            if not raw:
+                return f"(No template for {current_lang})"
+            return raw
+        return f"Command: {snippet.get('action')}"
+
+    def _preview_missing_names(self, raw):
+        """Placeholder names in `raw` with no built-in and no saved value."""
+        if not self.daemon or not raw:
+            return []
+        names = re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)(?:[+-]\d+)?\}", raw)
+        builtins = set(self.BUILTIN_PLACEHOLDERS) | {"cursor"}
+        settings = {}
+        config = getattr(self.daemon, "config", None)
+        if isinstance(config, dict):
+            settings = config.get("user_settings", {}) or {}
+        return sorted(
+            {n for n in names if n not in builtins and not str(settings.get(n, "")).strip()}
+        )
+
+    def _highlight_placeholders_html(self, text):
+        """Raw text as HTML with {placeholders} highlighted (item 5).
+
+        Present placeholders are orange; missing ones (no built-in, no
+        saved value) are red. A <pre> wrapper preserves the raw
+        whitespace of code templates.
+        """
+        missing = set(self._preview_missing_names(text))
+        escaped = html.escape(text or "")
+
+        def _wrap(match):
+            name = match.group(1)
+            color = "#f38ba8" if name in missing else "#ff9a3c"
+            return f'<b><font color="{color}">{html.escape(match.group(0))}</font></b>'
+
+        body = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)(?:[+-]\d+)?\}", _wrap, escaped)
+        return f"<pre>{body}</pre>"
+
+    def _toggle_preview_mode(self):
+        """Flip the preview between rendered and raw text (item 5)."""
+        self._preview_mode = "raw" if self._preview_mode == "rendered" else "rendered"
+        self._update_preview_display()
+
+    def _update_preview_display(self):
+        """Render the stored preview in the active Raw/Rendered mode."""
+        if not hasattr(self, "preview_text"):
+            return
+        if self._preview_mode == "raw":
+            self.preview_text.setHtml(self._highlight_placeholders_html(self._preview_raw_text))
+        else:
+            self.preview_text.setPlainText(self._preview_rendered_text)
+        missing = self._preview_missing_names(self._preview_raw_text)
+        if missing and hasattr(self, "preview_missing_label"):
+            self.preview_missing_label.setText(
+                "Missing settings: " + ", ".join(f"{{{n}}}" for n in missing)
+                + " - no value set; expansion will prompt for them."
+            )
+            self.preview_missing_label.setStyleSheet("color: #f38ba8;")
+        elif hasattr(self, "preview_missing_label"):
+            self.preview_missing_label.setText("")
+            self.preview_missing_label.setStyleSheet("")
+        if hasattr(self, "preview_mode_btn"):
+            self.preview_mode_btn.setText(
+                "Show rendered" if self._preview_mode == "raw" else "Show raw text"
+            )
 
     def selected_trigger(self):
         """Trigger of the selected snippet in whichever view is active."""
@@ -1945,6 +2554,7 @@ class TexterUI(QMainWindow):
 
     def _refresh_snippet_table(self, items, selected_before):
         """Fill the table with (trigger, snippet) pairs, keeping sort/selection."""
+        _query = self._search_query()
         table = self.snippet_table
         header = table.horizontalHeader()
         sort_section = header.sortIndicatorSection()
@@ -1975,6 +2585,14 @@ class TexterUI(QMainWindow):
                 if col == 0 and snippet.get("favorite"):
                     text = f"\u2605 {text}"
                 cell = SortableTableWidgetItem(text)
+                # Search-match highlighting (item 2): matched cells are
+                # bold with a subtle tint, so a match is visible at a
+                # glance without losing the cell's own text.
+                if _query and _query in str(text).lower():
+                    _font = cell.font()
+                    _font.setBold(True)
+                    cell.setFont(_font)
+                    cell.setBackground(QColor("#33241a"))
                 cell.setData(Qt.ItemDataRole.UserRole, sort_key)
                 if col == 0:
                     # Trigger lives in UserRole + 1: UserRole holds the sort key.
@@ -2025,8 +2643,12 @@ class TexterUI(QMainWindow):
             (trigger, snippet)
             for trigger, snippet in snippets.items()
             if self._matches_search(trigger, snippet, query)
+            and self._matches_quick_filter(trigger, snippet)
         ]
         self._sort_items(items)
+        # The tree delegate reads this for search-match bolding (item 2).
+        self.snippet_list._search_query = query
+        self._update_filter_status(len(items), len(snippets))
 
         if self._is_table_view():
             self._refresh_snippet_table(items, selected_before)
@@ -2270,12 +2892,16 @@ class TexterUI(QMainWindow):
             label.setText("\u2014")
         self.preview_used_label.setText("Select a snippet to preview")
         self.preview_text.clear()
+        self._preview_raw_text = ""
+        self._preview_rendered_text = ""
+        if hasattr(self, "preview_missing_label"):
+            self.preview_missing_label.setText("")
         self.preview_copy_btn.setEnabled(False)
         self.preview_insert_btn.setEnabled(False)
 
     def copy_preview(self):
-        """Copy the rendered expansion shown in the preview pane."""
-        text = self.preview_text.toPlainText()
+        """Copy the rendered expansion (even in raw preview mode)."""
+        text = self._preview_rendered_text or self.preview_text.toPlainText()
         if not text:
             return
         QApplication.clipboard().setText(text)
@@ -2329,7 +2955,9 @@ class TexterUI(QMainWindow):
         self.preview_used_label.setText(
             f"Used {used} times (last: {last_used}){disabled_note}"
         )
-        self.preview_text.setText(preview)
+        self._preview_raw_text = self._raw_expansion(snippet)
+        self._preview_rendered_text = preview
+        self._update_preview_display()
         self.preview_copy_btn.setEnabled(bool(preview))
         self.preview_insert_btn.setEnabled(bool(preview) and enabled)
 
@@ -2404,7 +3032,7 @@ class TexterUI(QMainWindow):
 
     def add_snippet(self):
         categories = self.daemon.get_categories() if self.daemon else []
-        dialog = AddSnippetDialog(self, categories=categories)
+        dialog = AddSnippetDialog(self, categories=categories, daemon=self.daemon)
         if dialog.exec() == QDialog.Accepted:
             snippet = dialog.get_snippet()
             if snippet and self.daemon:
@@ -2422,7 +3050,7 @@ class TexterUI(QMainWindow):
         snippet = {"trigger": trigger, **self.daemon.snippets.get(trigger, {})}
 
         categories = self.daemon.get_categories() if self.daemon else []
-        dialog = AddSnippetDialog(self, snippet=snippet, categories=categories)
+        dialog = AddSnippetDialog(self, snippet=snippet, categories=categories, daemon=self.daemon)
         if dialog.exec() == QDialog.Accepted:
             new_snippet = dialog.get_snippet()
             if new_snippet and self.daemon:
@@ -2440,7 +3068,7 @@ class TexterUI(QMainWindow):
             return
         source = dict(self.daemon.snippets.get(trigger, {}))
         # Pre-fill everything except the trigger so the user types a new one.
-        dialog = AddSnippetDialog(self, snippet=source, categories=self.daemon.get_categories())
+        dialog = AddSnippetDialog(self, snippet=source, categories=self.daemon.get_categories(), daemon=self.daemon)
         dialog.setWindowTitle(f"Duplicate '{trigger}'")
         dialog.trigger_input.setFocus()
         if dialog.exec() == QDialog.Accepted:
@@ -2486,6 +3114,9 @@ class TexterUI(QMainWindow):
         print(f"UI: {state} snippet '{trigger}' (saved)")
 
     def delete_snippet(self):
+        if self._is_table_view() and len(self.selected_triggers()) > 1:
+            self.bulk_delete()
+            return
         trigger = self.selected_trigger()
         if not trigger or not self.daemon:
             return
