@@ -3234,8 +3234,28 @@ class TexterUI(QMainWindow):
 
     def _on_section_toggle(self, btn, group, title, checked):
         """Fold/unfold one settings section and refresh its header arrow."""
-        group.setVisible(bool(checked))
-        btn.setText(f"{'\u25be' if checked else '\u25b8'} {title}")
+        arrow = "\u25be" if checked else "\u25b8"
+        btn.setText(f"{arrow} {title}")
+        if group is getattr(self, "values_group", None):
+            self._sync_values_section_visibility()
+        else:
+            group.setVisible(bool(checked))
+
+    def _sync_values_section_visibility(self):
+        """Placeholder values is snippet settings: show it only when a snippet is selected.
+
+        Your details and Preferences are global and keep their own fold
+        state. The toggle header is hidden too with no selection, so the
+        section does not look half-present on launch; a saved folded state
+        still wins once a snippet is selected.
+        """
+        group = getattr(self, "values_group", None)
+        btn = getattr(self, "values_toggle_btn", None)
+        if group is None or btn is None:
+            return
+        has_selection = self.selected_trigger() is not None
+        btn.setVisible(has_selection)
+        group.setVisible(has_selection and btn.isChecked())
 
     def _focus_search(self):
         """Ctrl+F: focus the search box and select its contents."""
@@ -3400,7 +3420,8 @@ class TexterUI(QMainWindow):
             _btn.setChecked(_checked)
             _btn.blockSignals(False)
             _group.setVisible(_checked)
-            _btn.setText(f"{'\u25be' if _checked else '\u25b8'} {_title}")
+            _arrow = "\u25be" if _checked else "\u25b8"
+            _btn.setText(f"{_arrow} {_title}")
         for _table, _key in (
             (getattr(self, "snippet_table", None), "tableColumnWidths"),
             (getattr(self, "user_settings_table", None), "settingsColumnWidths"),
@@ -3426,6 +3447,7 @@ class TexterUI(QMainWindow):
                 if 0 <= _c < self.snippet_table.columnCount():
                     self.snippet_table.setColumnHidden(_c, True)
 
+        self._sync_values_section_visibility()
     def _settings_snapshot(self):
         """Raw settings-field values, for unsaved-change detection (item 3)."""
         rows = []
@@ -3963,6 +3985,7 @@ class TexterUI(QMainWindow):
         if self._is_table_view():
             self._refresh_snippet_table(items, selected_before)
             self.refresh_user_setting_usage()
+            self._sync_values_section_visibility()
             return
 
         group_mode = self.group_combo.currentData()
@@ -4010,6 +4033,7 @@ class TexterUI(QMainWindow):
             if item is not None:
                 self.snippet_list.setCurrentItem(item)
         self.refresh_user_setting_usage()
+        self._sync_values_section_visibility()
 
     def _matches_search(self, trigger, snippet, query):
         """True if the trigger, tags, or any expansion text contains the query."""
@@ -4246,6 +4270,7 @@ class TexterUI(QMainWindow):
 
     def on_selection_changed(self):
         self._sync_bulk_bar()
+        self._sync_values_section_visibility()
         trigger = self.selected_trigger()
         if not trigger or not self.daemon:
             self._clear_preview()
