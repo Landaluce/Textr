@@ -45,19 +45,17 @@ def create_status_icon(color_name):
 TREE_BACKGROUND = QColor("#15151c")
 
 
-def apply_tree_theme(theme):
+def apply_tree_theme(tree_bg, hover_bg):
     """Point the delegate's painted colors at the active theme.
 
-    Selection stays orange with dark text in both themes; only the
-    gutter-erase background and the hover panel change.
+    The caller passes the theme's colors (see THEME_COLORS in
+    stylesheet.py). Selection keeps its own orange/dark colors in the
+    delegate; only the gutter-erase background and the hover panel
+    follow the theme.
     """
     global TREE_BACKGROUND
-    if theme == "light":
-        TREE_BACKGROUND = QColor("#ffffff")
-        SnippetTreeDelegate.HOVER_BG = QColor("#ececf0")
-    else:
-        TREE_BACKGROUND = QColor("#15151c")
-        SnippetTreeDelegate.HOVER_BG = QColor("#2e2e38")
+    TREE_BACKGROUND = QColor(tree_bg)
+    SnippetTreeDelegate.HOVER_BG = QColor(hover_bg)
 
 
 class SnippetTreeDelegate(QStyledItemDelegate):

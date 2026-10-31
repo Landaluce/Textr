@@ -36,7 +36,7 @@ from snippet_helpers import (
 BUILTIN_PLACEHOLDERS = _BUILTIN_PLACEHOLDERS
 SETTING_PLACEHOLDER_RE = _SETTING_PLACEHOLDER_RE
 
-from stylesheet import dark_stylesheet, light_stylesheet
+from stylesheet import STYLESHEETS, THEME_COLORS, THEME_ORDER
 
 from widgets import (
     TREE_BACKGROUND,
@@ -1419,8 +1419,8 @@ class TexterUI(QMainWindow):
         self.text_size_combo.currentIndexChanged.connect(self._on_display_pref_changed)
         prefs_layout.addRow("Text size:", self.text_size_combo)
         self.theme_combo = QComboBox()
-        self.theme_combo.addItem("Dark", "dark")
-        self.theme_combo.addItem("Light", "light")
+        for _key, _label in THEME_ORDER:
+            self.theme_combo.addItem(_label, _key)
         self.theme_combo.setToolTip("Color theme for the manager window")
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         prefs_layout.addRow("Theme:", self.theme_combo)
@@ -1912,16 +1912,19 @@ class TexterUI(QMainWindow):
 
     def _set_theme_state(self, theme):
         """Apply a theme's stylesheet and painted colors (no refresh)."""
-        theme = theme if theme in ("dark", "light") else "dark"
+        theme = theme if theme in THEME_COLORS else "dark"
         self._theme = theme
+        colors = THEME_COLORS[theme]
         app = QApplication.instance()
         if app is not None:
-            app.setStyleSheet(light_stylesheet if theme == "light" else dark_stylesheet)
-        self.TYPE_COLORS = dict(
-            self.TYPE_COLORS_LIGHT if theme == "light" else TexterUI.TYPE_COLORS
-        )
-        self.DISABLED_COLOR = "#6a6a75" if theme == "light" else "#9a9aa5"
-        apply_tree_theme(theme)
+            app.setStyleSheet(STYLESHEETS[theme])
+        self.TYPE_COLORS = {
+            "command": colors["type_command"],
+            "template": colors["type_template"],
+            "variable": colors["type_variable"],
+        }
+        self.DISABLED_COLOR = colors["disabled"]
+        apply_tree_theme(colors["tree_bg"], colors["hover"])
 
     def _apply_theme(self, theme):
         """Switch theme live: persist, restyle, rebuild list + preview."""
@@ -2201,7 +2204,7 @@ class TexterUI(QMainWindow):
         if _text_size in ("small", "medium", "large"):
             self._text_size = _text_size
         _theme = settings.value("theme")
-        if _theme in ("dark", "light"):
+        if _theme in THEME_COLORS:
             self._set_theme_state(_theme)
         self._sync_display_pref_combos()
         self._apply_display_prefs()
@@ -2466,10 +2469,14 @@ class TexterUI(QMainWindow):
             # resolvable: orange, never the missing red. Missing
             # placeholders are links: clicking one in the raw preview
             # fills it in (item 7).
-            if getattr(self, "_theme", "dark") == "light":
-                color = "#c2410c" if name is None or name not in missing else "#be123c"
-            else:
-                color = "#ff9a3c" if name is None or name not in missing else "#f38ba8"
+            _colors = THEME_COLORS.get(
+                getattr(self, "_theme", "dark"), THEME_COLORS["dark"]
+            )
+            color = (
+                _colors["preview_present"]
+                if name is None or name not in missing
+                else _colors["preview_missing"]
+            )
             inner = f'<b><font color="{color}">{html.escape(match.group(0))}</font></b>'
             if name is not None and name in missing:
                 return f'<a href="fill:{name}">{inner}</a>'
@@ -2528,8 +2535,11 @@ class TexterUI(QMainWindow):
                 "Missing settings: " + ", ".join(f"{{{n}}}" for n in missing)
                 + " - no value set; expansion will prompt for them." + _hint
             )
+            _colors = THEME_COLORS.get(
+                getattr(self, "_theme", "dark"), THEME_COLORS["dark"]
+            )
             self.preview_missing_label.setStyleSheet(
-                "color: #be123c;" if getattr(self, "_theme", "dark") == "light" else "color: #f38ba8;"
+                "color: " + _colors["preview_missing"] + ";"
             )
         elif hasattr(self, "preview_missing_label"):
             self.preview_missing_label.setText("")
@@ -3174,19 +3184,15 @@ class TexterUI(QMainWindow):
         "template": "#89b4fa",  # blue
         "variable": "#a6e3a1",  # green
     }
-    # Darker accents for the light theme, readable on white.
-    TYPE_COLORS_LIGHT = {
-        "command": "#c62828",   # red
-        "template": "#1d4ed8",  # blue
-        "variable": "#2e7d32",  # green
-    }
     DISABLED_COLOR = "#9a9aa5"  # briefing muted for disabled snippets
 
     def _row_foreground(self, snippet_type, enabled):
         """Row text color for a snippet type, following the active theme."""
         if not enabled:
             return QColor(self.DISABLED_COLOR)
-        fallback = "#1c1c22" if getattr(self, "_theme", "dark") == "light" else "#d6d6de"
+        fallback = THEME_COLORS.get(
+            getattr(self, "_theme", "dark"), THEME_COLORS["dark"]
+        )["text"]
         return QColor(self.TYPE_COLORS.get(snippet_type, fallback))
 
     def _add_snippet_item(self, parent, trigger, snippet):
