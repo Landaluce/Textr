@@ -25,6 +25,8 @@ from PySide6.QtGui import (
     QShortcut, QKeySequence,
 )
 
+from stylesheet import THEME_COLORS
+
 from snippet_helpers import (
     BUILTIN_PLACEHOLDERS,
     _fuzzy_score,
@@ -638,9 +640,8 @@ class QuickInsertDialog(QDialog):
         # Orange headers are readable on dark; on light they need the
         # darker orange, read from the same saved theme as the manager.
         _theme = QSettings("Landaluce", "Textr").value("theme", "dark")
-        item.setForeground(
-            QColor("#c2410c" if _theme == "light" else "#ff9a3c")
-        )
+        _colors = THEME_COLORS.get(_theme, THEME_COLORS["dark"])
+        item.setForeground(QColor(_colors["picker_header"]))
         self.list_widget.addItem(item)
         return item
 
