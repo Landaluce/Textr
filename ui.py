@@ -36,8 +36,11 @@ from snippet_helpers import (
 BUILTIN_PLACEHOLDERS = _BUILTIN_PLACEHOLDERS
 SETTING_PLACEHOLDER_RE = _SETTING_PLACEHOLDER_RE
 
+from stylesheet import dark_stylesheet, light_stylesheet
+
 from widgets import (
     TREE_BACKGROUND,
+    apply_tree_theme,
     create_status_icon,
     SnippetTreeDelegate,
     SnippetTreeWidget,
@@ -88,6 +91,7 @@ class TexterUI(QMainWindow):
         self._quick_filter = "all"
         self._density = "comfortable"
         self._text_size = "medium"
+        self._theme = "dark"
         self._right_min_height = 0
         self._search_regex = False
         self._search_case_sensitive = False
@@ -1414,6 +1418,12 @@ class TexterUI(QMainWindow):
         self.text_size_combo.setToolTip("Text size for the manager window")
         self.text_size_combo.currentIndexChanged.connect(self._on_display_pref_changed)
         prefs_layout.addRow("Text size:", self.text_size_combo)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Dark", "dark")
+        self.theme_combo.addItem("Light", "light")
+        self.theme_combo.setToolTip("Color theme for the manager window")
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        prefs_layout.addRow("Theme:", self.theme_combo)
         self.backup_keep_spin = QSpinBox()
         self.backup_keep_spin.setRange(1, 50)
         self.backup_keep_spin.setValue(
@@ -1886,10 +1896,11 @@ class TexterUI(QMainWindow):
         group.setVisible(btn.isChecked() and (has_selection or manual))
 
     def _sync_display_pref_combos(self):
-        """Set the Density / Text size combos from the restored values."""
+        """Set the Density / Text size / Theme combos from restored values."""
         for _combo, _value in (
             (getattr(self, "density_combo", None), getattr(self, "_density", "comfortable")),
             (getattr(self, "text_size_combo", None), getattr(self, "_text_size", "medium")),
+            (getattr(self, "theme_combo", None), getattr(self, "_theme", "dark")),
         ):
             if _combo is None:
                 continue
@@ -1898,6 +1909,35 @@ class TexterUI(QMainWindow):
                 _combo.blockSignals(True)
                 _combo.setCurrentIndex(_idx)
                 _combo.blockSignals(False)
+
+    def _set_theme_state(self, theme):
+        """Apply a theme's stylesheet and painted colors (no refresh)."""
+        theme = theme if theme in ("dark", "light") else "dark"
+        self._theme = theme
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(light_stylesheet if theme == "light" else dark_stylesheet)
+        self.TYPE_COLORS = dict(
+            self.TYPE_COLORS_LIGHT if theme == "light" else TexterUI.TYPE_COLORS
+        )
+        self.DISABLED_COLOR = "#6a6a75" if theme == "light" else "#9a9aa5"
+        apply_tree_theme(theme)
+
+    def _apply_theme(self, theme):
+        """Switch theme live: persist, restyle, rebuild list + preview."""
+        self._set_theme_state(theme)
+        try:
+            self._app_settings.setValue("theme", self._theme)
+        except Exception:
+            pass
+        self._apply_display_prefs()
+        self.refresh_snippet_list()
+        self.on_selection_changed()
+
+    def _on_theme_changed(self):
+        """Theme combo changed: apply at once and persist, like Density."""
+        if hasattr(self, "theme_combo"):
+            self._apply_theme(self.theme_combo.currentData() or "dark")
 
     def _on_display_pref_changed(self):
         """Density / text size changed: apply at once and persist."""
@@ -2160,6 +2200,9 @@ class TexterUI(QMainWindow):
         _text_size = settings.value("textSize")
         if _text_size in ("small", "medium", "large"):
             self._text_size = _text_size
+        _theme = settings.value("theme")
+        if _theme in ("dark", "light"):
+            self._set_theme_state(_theme)
         self._sync_display_pref_combos()
         self._apply_display_prefs()
         _legacy_expanded = settings.value("settingsExpanded")
@@ -2423,7 +2466,10 @@ class TexterUI(QMainWindow):
             # resolvable: orange, never the missing red. Missing
             # placeholders are links: clicking one in the raw preview
             # fills it in (item 7).
-            color = "#ff9a3c" if name is None or name not in missing else "#f38ba8"
+            if getattr(self, "_theme", "dark") == "light":
+                color = "#c2410c" if name is None or name not in missing else "#be123c"
+            else:
+                color = "#ff9a3c" if name is None or name not in missing else "#f38ba8"
             inner = f'<b><font color="{color}">{html.escape(match.group(0))}</font></b>'
             if name is not None and name in missing:
                 return f'<a href="fill:{name}">{inner}</a>'
@@ -2482,7 +2528,9 @@ class TexterUI(QMainWindow):
                 "Missing settings: " + ", ".join(f"{{{n}}}" for n in missing)
                 + " - no value set; expansion will prompt for them." + _hint
             )
-            self.preview_missing_label.setStyleSheet("color: #f38ba8;")
+            self.preview_missing_label.setStyleSheet(
+                "color: #be123c;" if getattr(self, "_theme", "dark") == "light" else "color: #f38ba8;"
+            )
         elif hasattr(self, "preview_missing_label"):
             self.preview_missing_label.setText("")
             self.preview_missing_label.setStyleSheet("")
@@ -2808,7 +2856,7 @@ class TexterUI(QMainWindow):
                     # Trigger lives in UserRole + 1: UserRole holds the sort key.
                     cell.setData(Qt.UserRole + 1, trigger)
                     cell.setForeground(
-                        QColor(self.DISABLED_COLOR if not enabled else self.TYPE_COLORS.get(snippet_type, "#d6d6de"))
+                        self._row_foreground(snippet_type, enabled)
                     )
                     cell.setToolTip(f"{snippet_type.capitalize()} | Category: {category}{state}")
                 table.setItem(row, col, cell)
@@ -3126,7 +3174,20 @@ class TexterUI(QMainWindow):
         "template": "#89b4fa",  # blue
         "variable": "#a6e3a1",  # green
     }
+    # Darker accents for the light theme, readable on white.
+    TYPE_COLORS_LIGHT = {
+        "command": "#c62828",   # red
+        "template": "#1d4ed8",  # blue
+        "variable": "#2e7d32",  # green
+    }
     DISABLED_COLOR = "#9a9aa5"  # briefing muted for disabled snippets
+
+    def _row_foreground(self, snippet_type, enabled):
+        """Row text color for a snippet type, following the active theme."""
+        if not enabled:
+            return QColor(self.DISABLED_COLOR)
+        fallback = "#1c1c22" if getattr(self, "_theme", "dark") == "light" else "#d6d6de"
+        return QColor(self.TYPE_COLORS.get(snippet_type, fallback))
 
     def _add_snippet_item(self, parent, trigger, snippet):
         # Snippets have no display name, only a trigger, so the row reads
@@ -3140,9 +3201,7 @@ class TexterUI(QMainWindow):
         snippet_type = snippet.get("type", "variable")
         category = snippet.get("category", "uncategorized")
         enabled = snippet.get("enabled", True)
-        item.setForeground(
-            0, QColor(self.DISABLED_COLOR if not enabled else self.TYPE_COLORS.get(snippet_type, "#d6d6de"))
-        )
+        item.setForeground(0, self._row_foreground(snippet_type, enabled))
         state = " | DISABLED" if not enabled else ""
         fav = " | Favourite" if snippet.get("favorite") else ""
         item.setToolTip(0, f"{snippet_type.capitalize()} | Category: {category}{state}{fav}")
