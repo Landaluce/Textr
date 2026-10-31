@@ -643,7 +643,14 @@ class QuickInsertDialog(QDialog):
         query = self.search.text().strip().lower()
         scored = []
         for trigger, snippet, raw in self._candidates():
+            # Best of trigger, tags, and category: a snippet tagged
+            # "job" is found by typing "job", not only by its trigger.
             score = _fuzzy_score(trigger, raw, query)
+            for _tag in (snippet.get("tags") or []):
+                score = max(score, _fuzzy_score(str(_tag), "", query))
+            score = max(
+                score, _fuzzy_score(str(snippet.get("category", "")), "", query)
+            )
             if query and score == 0:
                 continue
             usage = int(snippet.get("usage", 0) or 0)
@@ -1304,3 +1311,73 @@ class CategoryTagDialog(QDialog):
         if reply == QMessageBox.Yes:
             self.window.delete_tag(old)
             self._after_change()
+
+
+class UsageStatsDialog(QDialog):
+    """Library usage statistics, from stored usage/last_used data only.
+
+    No per-day expansion log is stored, so "today" / "last 7 days"
+    count snippets whose last expansion fell in that window, not
+    individual expansions. Read-only: nothing here changes the library.
+    """
+
+    def __init__(self, ui):
+        super().__init__(ui)
+        self.setWindowTitle("Usage statistics")
+        self.setMinimumWidth(420)
+        daemon = getattr(ui, "daemon", None)
+        with daemon.snippets_lock:
+            snippets = dict(daemon.snippets) if daemon is not None else {}
+        self.stats_rows = self._compute_rows(snippets, daemon)
+        layout = QFormLayout(self)
+        for label, value in self.stats_rows:
+            layout.addRow(label + ":", QLabel(str(value)))
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addRow(close_btn)
+
+    @staticmethod
+    def _compute_rows(snippets, daemon):
+        """(label, value) rows for the stats dialog."""
+        total = len(snippets)
+        total_uses = sum(int(sn.get("usage", 0) or 0) for sn in snippets.values())
+        disabled = sum(1 for sn in snippets.values() if not sn.get("enabled", True))
+        never_used = [t for t, sn in snippets.items() if int(sn.get("usage", 0) or 0) == 0]
+        ranked = sorted(
+            snippets.items(),
+            key=lambda kv: (-int(kv[1].get("usage", 0) or 0), kv[0].lower()),
+        )
+        top = [f"{t} ({int(sn.get('usage', 0) or 0)}x)" for t, sn in ranked[:5]
+               if int(sn.get("usage", 0) or 0) > 0]
+        now = datetime.now()
+        today = 0
+        week = 0
+        for sn in snippets.values():
+            raw = sn.get("last_used") or ""
+            try:
+                when = datetime.fromisoformat(raw)
+            except (TypeError, ValueError):
+                continue
+            if when.date() == now.date():
+                today += 1
+            if (now - when).days < 7 and when <= now:
+                week += 1
+        last_backup = "never"
+        list_backups = getattr(daemon, "list_backups", None) if daemon is not None else None
+        if callable(list_backups):
+            try:
+                times = [b["mtime"] for b in list_backups() if b.get("kind") == "snippets"]
+                if times:
+                    last_backup = datetime.fromtimestamp(max(times)).strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                pass
+        return [
+            ("Snippets", total),
+            ("Enabled / disabled", f"{total - disabled} / {disabled}"),
+            ("Total expansions", total_uses),
+            ("Most used", ", ".join(top) if top else "none yet"),
+            ("Never used", f"{len(never_used)}" + (f" ({', '.join(sorted(never_used)[:5])})" if never_used else "")),
+            ("Snippets used today", today),
+            ("Snippets used in the last 7 days", week),
+            ("Last snippets backup", last_backup),
+        ]
