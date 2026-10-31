@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QTreeWidget, QTreeWidgetItem, QAbstractItemView,
     QStyledItemDelegate, QStyle, QStyleOptionViewItem,
     QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox,
-    QRadioButton, QScrollArea, QFrame, QInputDialog
+    QRadioButton, QScrollArea, QFrame, QInputDialog, QSpinBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect, QSettings, QEvent, QSize, QUrl
 from PySide6.QtGui import (
@@ -58,6 +58,7 @@ from dialogs import (
     PackConflictDialog,
     CleanupDialog,
     CategoryTagDialog,
+    UsageStatsDialog,
 )
 
 
@@ -748,6 +749,10 @@ class TexterUI(QMainWindow):
         TrashDialog(self).exec()
         self.refresh_snippet_list()
 
+    def show_usage_stats(self):
+        """Usage-statistics dialog (read-only, from stored usage data)."""
+        UsageStatsDialog(self).exec()
+
     def show_cleanup(self):
         CleanupDialog(self).exec()
         self.refresh_snippet_list()
@@ -896,6 +901,8 @@ class TexterUI(QMainWindow):
             "close_behavior": self.close_behavior_combo.currentData(),
             "date_format": self.date_format_edit.text().strip() or "%Y-%m-%d",
             "time_format": self.time_format_edit.text().strip() or "%H:%M",
+            "backup_keep": int(self.backup_keep_spin.value()),
+            "trash_expire_days": int(self.trash_expire_spin.value()),
             "user_settings": custom_settings,
         }
         previous_config = dict(self.daemon.config)
@@ -1200,6 +1207,19 @@ class TexterUI(QMainWindow):
         self.delete_shortcut_table.setContext(Qt.WidgetWithChildrenShortcut)
         self.delete_shortcut_table.activated.connect(self.delete_snippet)
 
+        # Ctrl+D toggles the selected snippet(s); Ctrl+Enter inserts
+        # the selected snippet into the focused app. Scoped to the
+        # snippet views like Edit/Delete/Undo so typing in fields
+        # never triggers them.
+        for _widget in (self.snippet_list, self.snippet_table):
+            _toggle_sc = QShortcut(QKeySequence("Ctrl+D"), _widget)
+            _toggle_sc.setContext(Qt.WidgetWithChildrenShortcut)
+            _toggle_sc.activated.connect(self.toggle_snippet_enabled)
+            for _seq in ("Ctrl+Return", "Ctrl+Enter"):
+                _insert_sc = QShortcut(QKeySequence(_seq), _widget)
+                _insert_sc.setContext(Qt.WidgetWithChildrenShortcut)
+                _insert_sc.activated.connect(self.insert_preview)
+
         # Keyboard-first navigation (item 7). Ctrl+F focuses search from
         # anywhere in the manager; Esc clears it while it has focus;
         # Ctrl+1 / Ctrl+2 switch Tree / Table without the mouse.
@@ -1260,6 +1280,13 @@ class TexterUI(QMainWindow):
             detail_layout.addLayout(column)
             self.preview_detail_labels[key] = value
         preview_layout.addLayout(detail_layout)
+        # Tags are links: clicking one filters the list by that tag.
+        _tags_label = self.preview_detail_labels.get("tags")
+        if _tags_label is not None:
+            _tags_label.setTextFormat(Qt.RichText)
+            _tags_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+            _tags_label.setOpenExternalLinks(False)
+            _tags_label.linkActivated.connect(self._filter_by_preview_tag)
         self.preview_used_label = QLabel("Select a snippet to preview")
         preview_layout.addWidget(self.preview_used_label)
         self.preview_note_label = QLabel("")
@@ -1387,6 +1414,26 @@ class TexterUI(QMainWindow):
         self.text_size_combo.setToolTip("Text size for the manager window")
         self.text_size_combo.currentIndexChanged.connect(self._on_display_pref_changed)
         prefs_layout.addRow("Text size:", self.text_size_combo)
+        self.backup_keep_spin = QSpinBox()
+        self.backup_keep_spin.setRange(1, 50)
+        self.backup_keep_spin.setValue(
+            int(self.daemon.config.get("backup_keep", 10))
+            if (self.daemon and hasattr(self.daemon, "config")) else 10
+        )
+        self.backup_keep_spin.setToolTip(
+            "How many backups of each kind (snippets, config) to keep"
+        )
+        prefs_layout.addRow("Backups to keep:", self.backup_keep_spin)
+        self.trash_expire_spin = QSpinBox()
+        self.trash_expire_spin.setRange(0, 365)
+        self.trash_expire_spin.setValue(
+            int(self.daemon.config.get("trash_expire_days", 0))
+            if (self.daemon and hasattr(self.daemon, "config")) else 0
+        )
+        self.trash_expire_spin.setToolTip(
+            "Drop trashed snippets older than this many days on startup; 0 = never"
+        )
+        prefs_layout.addRow("Empty Trash after (days):", self.trash_expire_spin)
 
         # --- Placeholder values ---
         values_group = QGroupBox("")
@@ -1450,6 +1497,8 @@ class TexterUI(QMainWindow):
         self.time_format_edit.textChanged.connect(self._update_settings_dirty)
         self.picker_hotkey_edit.textChanged.connect(self._update_settings_dirty)
         self.close_behavior_combo.currentIndexChanged.connect(self._update_settings_dirty)
+        self.backup_keep_spin.valueChanged.connect(self._update_settings_dirty)
+        self.trash_expire_spin.valueChanged.connect(self._update_settings_dirty)
 
         # Section toggles (headers): one per section, folded state saved.
         self.details_toggle_btn = self._make_section_toggle("Your details", details_group)
@@ -1536,6 +1585,7 @@ class TexterUI(QMainWindow):
         self.library_menu.addSeparator()
         self.library_menu.addAction("Backup now", self.backup_now)
         self.library_menu.addAction("Export visible to CSV", self.export_visible_csv)
+        self.library_menu.addAction("Usage statistics", self.show_usage_stats)
         self.library_menu.addSeparator()
         self.library_menu.addAction(
             "New snippet from clipboard", self.new_snippet_from_clipboard
@@ -1964,6 +2014,8 @@ class TexterUI(QMainWindow):
             "Ctrl+N — Add snippet",
             "F2 / Enter — Edit selected snippet",
             "Delete — Delete selected snippet (to Trash)",
+            "Ctrl+D — Enable/disable selected snippet(s)",
+            "Ctrl+Enter — Insert selected snippet into the focused app",
             "Ctrl+Z — Undo last change (while the snippet list has focus)",
             "Ctrl+F — Focus search",
             "Esc — Clear search (while search has focus)",
@@ -2205,6 +2257,8 @@ class TexterUI(QMainWindow):
             self.close_behavior_combo.currentData() if hasattr(self, "close_behavior_combo") else None,
             self.date_format_edit.text() if hasattr(self, "date_format_edit") else "",
             self.time_format_edit.text() if hasattr(self, "time_format_edit") else "",
+            self.backup_keep_spin.value() if hasattr(self, "backup_keep_spin") else 10,
+            self.trash_expire_spin.value() if hasattr(self, "trash_expire_spin") else 0,
             tuple(rows),
         )
 
@@ -2385,6 +2439,31 @@ class TexterUI(QMainWindow):
         """Flip the preview between rendered and raw text (item 5)."""
         self._preview_mode = "raw" if self._preview_mode == "rendered" else "rendered"
         self._update_preview_display()
+
+    def _filter_by_preview_tag(self, link):
+        """Preview tag link clicked: filter the list by that tag."""
+        if not link.startswith("tag:"):
+            return
+        try:
+            index = int(link[len("tag:"):])
+        except ValueError:
+            return
+        trigger = self.selected_trigger()
+        if not trigger or not self.daemon:
+            return
+        tags = self.daemon.snippets.get(trigger, {}).get("tags") or []
+        if 0 <= index < len(tags):
+            self._filter_by_tag(tags[index])
+
+    def _filter_by_tag(self, tag):
+        """Show snippets matching `tag` via the search box."""
+        if not hasattr(self, "search_input"):
+            return
+        self.search_input.setText(tag)
+        self.refresh_snippet_list()
+        self.statusBar().showMessage(
+            f"Filtered by tag '{tag}' \u2014 clear search to show all", 4000
+        )
 
     def _update_preview_display(self):
         """Render the stored preview in the active Raw/Rendered mode."""
@@ -3150,7 +3229,12 @@ class TexterUI(QMainWindow):
         enabled = snippet.get("enabled", True)
 
         self.preview_detail_labels["category"].setText(snippet_category)
-        self.preview_detail_labels["tags"].setText(", ".join(tags) if tags else "none")
+        self.preview_detail_labels["tags"].setText(
+            ", ".join(
+                f'<a href="tag:{_i}">{html.escape(_tag)}</a>'
+                for _i, _tag in enumerate(tags)
+            ) if tags else "none"
+        )
         self.preview_detail_labels["type"].setText(snippet_type)
         self.preview_detail_labels["trigger"].setText(trigger)
         disabled_note = " \u2014 DISABLED, will not expand" if not enabled else ""
@@ -3295,17 +3379,17 @@ class TexterUI(QMainWindow):
                 print(f"UI: Duplicated snippet '{trigger}' as '{new_trigger}' (saved)")
 
     def toggle_snippet_enabled(self):
-        """Flip the enabled flag of the selected snippet and persist it."""
-        trigger = self.selected_trigger()
-        if not trigger or not self.daemon:
+        """Flip the enabled flag of the selected snippet(s), one undo step."""
+        triggers = self.selected_triggers()
+        if not triggers or not self.daemon:
             return
-        snippet = dict(self.daemon.snippets.get(trigger, {}))
-        snippet["enabled"] = not snippet.get("enabled", True)
-        self._push_undo(f"{'Disable' if not snippet['enabled'] else 'Enable'} snippet '{trigger}'")
-        self.daemon.add_or_update_snippet(trigger, snippet)
+        self._push_undo(f"Toggle enabled for {len(triggers)} snippet(s)")
+        for trigger in triggers:
+            snippet = dict(self.daemon.snippets.get(trigger, {}))
+            snippet["enabled"] = not snippet.get("enabled", True)
+            self.daemon.add_or_update_snippet(trigger, snippet)
         self.refresh_snippet_list()
-        state = "Disabled" if not snippet["enabled"] else "Enabled"
-        print(f"UI: {state} snippet '{trigger}' (saved)")
+        print(f"UI: Toggled enabled for {len(triggers)} snippet(s) (saved)")
 
     def toggle_snippet_favorite(self):
         """Flip the favourite flag of the selected snippet and persist it.

@@ -94,6 +94,7 @@ class Daemon:
         self.pending_buffer_len = 0
         self.load_snippets()
         self.load_config()
+        self.prune_expired_trash()
 
     def _resolve_path(self, filename):
         """Locate a data file, preferring XDG config with a legacy fallback.
@@ -140,6 +141,11 @@ class Daemon:
             # commands; configurable in the UI profile settings.
             "date_format": "%Y-%m-%d",
             "time_format": "%H:%M",
+            # How many backups per kind _backup_file keeps (Preferences).
+            "backup_keep": 10,
+            # Trash auto-expire: drop entries older than this many days
+            # on startup; 0 disables it (Preferences).
+            "trash_expire_days": 0,
         }
         if os.path.exists(self.config_file):
             try:
@@ -160,8 +166,9 @@ class Daemon:
     def _backup_file(self, path, kind):
         """Copy `path` into backups/ as kind-YYYYMMDD-HHMMSS.json.
 
-        Keeps the 10 newest backups per kind, pruning older ones. Returns
-        the backup path, or None when there was nothing to back up.
+        Keeps the `backup_keep` newest backups per kind (default 10),
+        pruning older ones. Returns the backup path, or None when there
+        was nothing to back up.
         """
         try:
             if not os.path.exists(path):
@@ -174,12 +181,17 @@ class Daemon:
                 n += 1
                 dest = os.path.join(self.backup_dir, f"{kind}-{stamp}-{n}.json")
             shutil.copyfile(path, dest)
-            # Prune: keep the 10 newest per kind.
+            # Prune: keep the `backup_keep` newest per kind.
+            try:
+                keep = int((getattr(self, "config", None) or {}).get("backup_keep", 10) or 10)
+            except (TypeError, ValueError):
+                keep = 10
+            keep = max(1, keep)
             peers = sorted(
                 f for f in os.listdir(self.backup_dir)
                 if f.startswith(kind + "-") and f.endswith(".json")
             )
-            for old in peers[:-10]:
+            for old in peers[:-keep]:
                 try:
                     os.remove(os.path.join(self.backup_dir, old))
                 except OSError:
@@ -375,6 +387,37 @@ class Daemon:
 
     def clear_trash(self):
         self._save_trash({})
+
+    def prune_expired_trash(self):
+        """Drop trash entries older than `trash_expire_days` (0 = never).
+
+        Entries without a parseable `deleted_at` stamp are kept: they
+        predate stamping, and deleting them unseen would be a surprise.
+        Returns how many entries were removed.
+        """
+        try:
+            days = int((getattr(self, "config", None) or {}).get("trash_expire_days", 0) or 0)
+        except (TypeError, ValueError):
+            days = 0
+        if days <= 0:
+            return 0
+        cutoff = datetime.now() - timedelta(days=days)
+        trash = self.load_trash()
+        kept = {}
+        removed = 0
+        for trigger, entry in trash.items():
+            deleted_at = entry.get("deleted_at") if isinstance(entry, dict) else None
+            try:
+                when = datetime.fromisoformat(deleted_at) if deleted_at else None
+            except ValueError:
+                when = None
+            if when is not None and when < cutoff:
+                removed += 1
+            else:
+                kept[trigger] = entry
+        if removed:
+            self._save_trash(kept)
+        return removed
 
     def save_config(self):
         self._backup_file(self.config_file, "config")
