@@ -635,7 +635,12 @@ class QuickInsertDialog(QDialog):
         header_font = item.font()
         header_font.setBold(True)
         item.setFont(header_font)
-        item.setForeground(QColor("#ff9a3c"))
+        # Orange headers are readable on dark; on light they need the
+        # darker orange, read from the same saved theme as the manager.
+        _theme = QSettings("Landaluce", "Textr").value("theme", "dark")
+        item.setForeground(
+            QColor("#c2410c" if _theme == "light" else "#ff9a3c")
+        )
         self.list_widget.addItem(item)
         return item
 

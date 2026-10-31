@@ -1,16 +1,19 @@
 import sys
 import threading
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 from daemon import Daemon
 from ui import TexterUI
-from stylesheet import dark_stylesheet
+from stylesheet import dark_stylesheet, light_stylesheet
 
 
 def main():
     app = QApplication(sys.argv)
     
-    # Sleek Developer Dark Mode QSS Stylesheet
-    app.setStyleSheet(dark_stylesheet)
+    # Saved theme (Dark by default); the manager's Theme combo in
+    # Preferences changes it live and persists it here.
+    theme = QSettings("Landaluce", "Textr").value("theme", "dark")
+    app.setStyleSheet(light_stylesheet if theme == "light" else dark_stylesheet)
 
     daemon = Daemon()
     window = TexterUI(daemon=daemon)

@@ -40,8 +40,24 @@ def create_status_icon(color_name):
 
 # Matches QTreeWidget background-color in stylesheet.py. The view paints a
 # full-row highlight below the delegate; this erases it from the indentation
-# gutter (the empty area left of the item text).
+# gutter (the empty area left of the item text). Updated by
+# apply_tree_theme() when the manager switches themes.
 TREE_BACKGROUND = QColor("#15151c")
+
+
+def apply_tree_theme(theme):
+    """Point the delegate's painted colors at the active theme.
+
+    Selection stays orange with dark text in both themes; only the
+    gutter-erase background and the hover panel change.
+    """
+    global TREE_BACKGROUND
+    if theme == "light":
+        TREE_BACKGROUND = QColor("#ffffff")
+        SnippetTreeDelegate.HOVER_BG = QColor("#ececf0")
+    else:
+        TREE_BACKGROUND = QColor("#15151c")
+        SnippetTreeDelegate.HOVER_BG = QColor("#2e2e38")
 
 
 class SnippetTreeDelegate(QStyledItemDelegate):
