@@ -1227,14 +1227,19 @@ class Daemon:
 
         # Commands always work, even when paused (e.g. :resume, :quit).
         if item.get("type") == "command":
-            expansion = self.is_valid_trigger(trigger)
             # Commands count as used even when they produce no text: the
             # trigger fired and its action ran. Previously only date/time
             # commands were recorded (they return text); hide, ui, pause
             # and the rest never reached _record_usage, so their Uses
             # stayed 0 and they never appeared in Recent, most-used, or
             # today/week statistics.
+            # Record BEFORE running the command: shutdown/restart save
+            # the library from inside run_command, and quit_app's save
+            # can land before this record when the quit signal is
+            # delivered synchronously, so recording after the command
+            # left :q / :restart at 0 on disk every time.
             self._record_usage(trigger)
+            expansion = self.is_valid_trigger(trigger)
             if expansion is not None:
                 self.replace(trigger, expansion)
             else:
