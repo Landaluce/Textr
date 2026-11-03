@@ -5,6 +5,7 @@ import html
 import json
 import os
 import shutil
+import subprocess
 import threading
 import re
 from datetime import datetime
@@ -167,10 +168,10 @@ class TexterUI(QMainWindow):
             self.toggle_writing_btn.blockSignals(False)
             self._sync_toggle_text()
 
-    def quit_app(self):
+    def quit_app(self, skip_confirm=False):
         """Quit the entire application"""
         print("UI: Quitting application...")
-        if not self._confirm_unsaved_settings():
+        if not skip_confirm and not self._confirm_unsaved_settings():
             return
         self.really_quit = True
         if self.daemon:
@@ -3339,8 +3340,50 @@ class TexterUI(QMainWindow):
         if handle:
             handle.requestActivate()
 
+    def _relaunch_process(self):
+        """Start a fresh Textr process for a restart; True on success.
+
+        Frozen (PyInstaller) builds re-run the executable itself; script
+        runs re-run the interpreter on the entry script with the same
+        arguments. Detached with stdio discarded so the child outlives
+        this process and does not hold its terminal. The child needs
+        about a second to reach hotkey registration (interpreter plus
+        PySide6 import), by which time quit_app() has released them, so
+        there is no hotkey race with the exiting process.
+        """
+        try:
+            if getattr(sys, "frozen", False):
+                argv = [sys.executable] + sys.argv[1:]
+            else:
+                argv = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
+            subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return True
+        except Exception as e:
+            print(f"UI: Restart failed to launch a new process: {e}")
+            self.statusBar().showMessage(
+                "Restart failed: could not start Textr again", 4000
+            )
+            return False
+
     def restart_app(self):
-        self.quit_app()
+        """Restart Textr: launch a fresh process, then quit this one.
+
+        This used to only call quit_app(), so :restart never came back.
+        The unsaved-settings check runs once, before the new process
+        starts, so cancelling it leaves this instance running untouched,
+        and a failed relaunch never quits the running instance either.
+        """
+        if not self._confirm_unsaved_settings():
+            return
+        if not self._relaunch_process():
+            return
+        self.quit_app(skip_confirm=True)
 
     def trigger_conflicts(self, trigger, exclude=None):
         """Human-readable conflict messages for a trigger, if any.
