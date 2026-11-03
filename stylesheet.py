@@ -1231,7 +1231,8 @@ THEME_COLORS = {
         text="#d6d6de", muted="#9a9aa5", accent="#ff9a3c",
         accent_text="#11111b", tree_bg="#15151c", hover="#2e2e38",
         type_command="#f38ba8", type_template="#89b4fa",
-        type_variable="#a6e3a1", disabled="#9a9aa5",
+        type_variable="#a6e3a1",
+        type_shell="#89dceb", disabled="#9a9aa5",
         preview_present="#ff9a3c", preview_missing="#f38ba8",
         picker_header="#ff9a3c",
     ),
@@ -1239,7 +1240,8 @@ THEME_COLORS = {
         text="#1c1c22", muted="#6a6a75", accent="#ff9a3c",
         accent_text="#11111b", tree_bg="#ffffff", hover="#ececf0",
         type_command="#c62828", type_template="#1d4ed8",
-        type_variable="#2e7d32", disabled="#6a6a75",
+        type_variable="#2e7d32",
+        type_shell="#0e7490", disabled="#6a6a75",
         preview_present="#c2410c", preview_missing="#be123c",
         picker_header="#c2410c",
     ),
@@ -1247,7 +1249,8 @@ THEME_COLORS = {
         text="#cdd6f4", muted="#9399b2", accent="#b4befe",
         accent_text="#11111b", tree_bg="#313244", hover="#45475a",
         type_command="#f38ba8", type_template="#89b4fa",
-        type_variable="#a6e3a1", disabled="#9399b2",
+        type_variable="#a6e3a1",
+        type_shell="#89dceb", disabled="#9399b2",
         preview_present="#fab387", preview_missing="#f38ba8",
         picker_header="#b4befe",
     ),
@@ -1255,7 +1258,8 @@ THEME_COLORS = {
         text="#d8dee9", muted="#7b8694", accent="#88c0d0",
         accent_text="#2e3440", tree_bg="#3b4252", hover="#4c566a",
         type_command="#bf616a", type_template="#81a1c1",
-        type_variable="#a3be8c", disabled="#7b8694",
+        type_variable="#a3be8c",
+        type_shell="#b48ead", disabled="#7b8694",
         preview_present="#88c0d0", preview_missing="#bf616a",
         picker_header="#88c0d0",
     ),
@@ -1263,7 +1267,8 @@ THEME_COLORS = {
         text="#f8f8f2", muted="#6272a4", accent="#ff79c6",
         accent_text="#282a36", tree_bg="#44475a", hover="#6272a4",
         type_command="#ff5555", type_template="#bd93f9",
-        type_variable="#50fa7b", disabled="#6272a4",
+        type_variable="#50fa7b",
+        type_shell="#ffb86c", disabled="#6272a4",
         preview_present="#ff79c6", preview_missing="#ff5555",
         picker_header="#ff79c6",
     ),
@@ -1271,7 +1276,8 @@ THEME_COLORS = {
         text="#ebdbb2", muted="#928374", accent="#fe8019",
         accent_text="#282828", tree_bg="#3c3836", hover="#504945",
         type_command="#fb4934", type_template="#83a598",
-        type_variable="#b8bb26", disabled="#928374",
+        type_variable="#b8bb26",
+        type_shell="#d3869b", disabled="#928374",
         preview_present="#fe8019", preview_missing="#fb4934",
         picker_header="#fe8019",
     ),
@@ -1279,7 +1285,8 @@ THEME_COLORS = {
         text="#ffffff", muted="#c0c0c0", accent="#ffd700",
         accent_text="#000000", tree_bg="#1a1a1a", hover="#333333",
         type_command="#ff6b6b", type_template="#79b8ff",
-        type_variable="#7ee787", disabled="#8b949e",
+        type_variable="#7ee787",
+        type_shell="#ffa657", disabled="#8b949e",
         preview_present="#ffd700", preview_missing="#ff6b6b",
         picker_header="#ffd700",
     ),
@@ -1287,11 +1294,50 @@ THEME_COLORS = {
         text="#4a4238", muted="#8a7f70", accent="#c2410c",
         accent_text="#fffaf0", tree_bg="#fffaf0", hover="#efe4c8",
         type_command="#b91c1c", type_template="#1d4ed8",
-        type_variable="#15803d", disabled="#8a7f70",
+        type_variable="#15803d",
+        type_shell="#b45309", disabled="#8a7f70",
         preview_present="#c2410c", preview_missing="#be123c",
         picker_header="#c2410c",
     ),
 }
+
+def _system_color_scheme():
+    """The OS color scheme as "dark"/"light", or None when unknown.
+
+    Kept as a module-level function (rather than inline in
+    resolved_theme) so tests can monkeypatch it: the real
+    QStyleHints object cannot easily be faked offscreen.
+    """
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is None:
+            return None
+        scheme = app.styleHints().colorScheme()
+        if scheme == Qt.ColorScheme.Dark:
+            return "dark"
+        if scheme == Qt.ColorScheme.Light:
+            return "light"
+    except Exception:
+        return None
+    return None
+
+
+def resolved_theme(saved_name):
+    """Concrete theme name for a saved theme value.
+
+    "system" follows the OS light/dark scheme (dark when the scheme
+    is unknown or there is no application yet). Any other unknown
+    value falls back to "dark". THEME_ORDER stays the 8 concrete
+    themes; "system" is only ever a saved value, never a theme.
+    """
+    if saved_name == "system":
+        return _system_color_scheme() or "dark"
+    if saved_name in THEME_COLORS:
+        return saved_name
+    return "dark"
+
 
 THEME_ORDER = [
     ("dark", "Dark"),

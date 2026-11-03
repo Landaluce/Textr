@@ -32,12 +32,13 @@ from snippet_helpers import (
     _fuzzy_score,
     _normalized_expansion,
     history_entry,
+    parse_espanso_matches,
 )
 
 BUILTIN_PLACEHOLDERS = _BUILTIN_PLACEHOLDERS
 SETTING_PLACEHOLDER_RE = _SETTING_PLACEHOLDER_RE
 
-from stylesheet import STYLESHEETS, THEME_COLORS, THEME_ORDER
+from stylesheet import STYLESHEETS, THEME_COLORS, THEME_ORDER, resolved_theme
 
 from widgets import (
     TREE_BACKGROUND,
@@ -324,6 +325,8 @@ class TexterUI(QMainWindow):
             for text in texts:
                 if isinstance(text, str):
                     for key in self.SETTING_PLACEHOLDER_RE.findall(text):
+                        if key in ("counter", "random"):
+                            continue
                         references.setdefault(key, set()).add(str(trigger))
         return references
 
@@ -360,6 +363,8 @@ class TexterUI(QMainWindow):
                     if not isinstance(text, str):
                         continue
                     for key in self.SETTING_PLACEHOLDER_RE.findall(text):
+                        if key in ("counter", "random"):
+                            continue
                         triggers_by_key.setdefault(key, set()).add(str(trigger))
                         uses_by_key[key] = uses_by_key.get(key, 0) + 1
         for row in range(self.user_settings_table.rowCount()):
@@ -660,7 +665,7 @@ class TexterUI(QMainWindow):
         insertable = {
             t: s for t, s in snippets.items()
             if isinstance(s, dict)
-            and s.get("type") in ("variable", "template")
+            and s.get("type") in ("variable", "template", "shell")
             and s.get("enabled", True)
         }
         favourites = sorted(
@@ -701,20 +706,32 @@ class TexterUI(QMainWindow):
                 f"No {self.language_combo.currentText()} template for '{trigger}'", 3000
             )
             return
-        missing = []
-        _missing_fn = getattr(self.daemon, "missing_placeholders", None)
-        if callable(_missing_fn):
-            missing = _missing_fn(raw)
-        choices = []
-        _choice_fn = getattr(self.daemon, "choice_placeholders", None)
-        if callable(_choice_fn):
-            choices = _choice_fn(raw)
-        values = {}
-        if missing or choices:
-            values = self.prompt_for_values_sync(missing, choices)
-            if values is None:
-                return
-        final = self.daemon.render_template(raw, prompt_values=values)
+        _render_fn = getattr(self.daemon, "render_insert_text", None)
+        if snippet.get("type") == "shell":
+            # Shell snippets run exactly once, at insert time.
+            if callable(_render_fn):
+                final = _render_fn(snippet)
+            else:
+                final = raw
+        else:
+            missing = []
+            _missing_fn = getattr(self.daemon, "missing_placeholders", None)
+            if callable(_missing_fn):
+                missing = _missing_fn(raw)
+            choices = []
+            _choice_fn = getattr(self.daemon, "choice_placeholders", None)
+            if callable(_choice_fn):
+                choices = _choice_fn(raw)
+            values = {}
+            if missing or choices:
+                values = self.prompt_for_values_sync(missing, choices)
+                if values is None:
+                    return
+            if callable(_render_fn):
+                final = _render_fn(
+                    snippet, prompt_values=values, raw=raw)
+            else:
+                final = self.daemon.render_template(raw, prompt_values=values)
         self.hide_window()
         self._schedule_picker_insert(trigger, final, 300)
 
@@ -782,7 +799,7 @@ class TexterUI(QMainWindow):
             with self.daemon.snippets_lock:
                 snippets = {
                     t: {k: v for k, v in self.daemon.snippets[t].items()
-                        if k not in ("usage", "last_used", "history")}
+                        if k not in ("usage", "last_used", "history", "counter")}
                     for t in triggers if t in self.daemon.snippets
                 }
             pack = {"format": "textr-pack", "version": 1, "snippets": snippets}
@@ -841,7 +858,7 @@ class TexterUI(QMainWindow):
                 if not isinstance(snippet, dict):
                     return snippet
                 return {k: v for k, v in snippet.items()
-                        if k not in ("usage", "last_used")}
+                        if k not in ("usage", "last_used", "counter")}
 
             conflicts = sorted(
                 t for t in snippets
@@ -874,19 +891,89 @@ class TexterUI(QMainWindow):
                 )
                 return
             to_import = {
-                t: ({k: v for k, v in sn.items() if k not in ("usage", "last_used")}
+                t: ({k: v for k, v in sn.items() if k not in ("usage", "last_used", "counter")}
                     if isinstance(sn, dict) else sn)
                 for t, sn in to_import.items()
             }
+            # Imported shell snippets run commands: force them disabled
+            # so the user reviews each command before it can ever run.
+            shell_disabled = 0
+            for sn in to_import.values():
+                if (isinstance(sn, dict) and sn.get("type") == "shell"
+                        and sn.get("enabled", True)):
+                    sn["enabled"] = False
+                    shell_disabled += 1
             self._push_undo(f"Import pack ({len(to_import)} snippet(s))")
             self.daemon.import_snippets(to_import)
             self.refresh_snippet_list()
             self.find_missing_user_settings(notify=False)
-            self.statusBar().showMessage(
-                f"Imported pack: {len(to_import)} snippet(s)", 3000
-            )
+            _msg = f"Imported pack: {len(to_import)} snippet(s)"
+            if shell_disabled:
+                _msg += (f" ({shell_disabled} shell snippet(s) disabled "
+                         "for review)")
+            self.statusBar().showMessage(_msg, 4000)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to import pack: {e}")
+
+    def import_espanso(self):
+        """Import an Espanso match file (.yml/.yaml) as variable snippets."""
+        if not self.daemon:
+            return
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import Espanso file", "", "YAML Files (*.yml *.yaml)"
+        )
+        if not file_path:
+            return
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                entries = parse_espanso_matches(f.read())
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to read Espanso file: {e}")
+            return
+        if not entries:
+            QMessageBox.information(
+                self, "Import Espanso file", "No matches found in the file.")
+            return
+        self.import_espanso_entries(entries)
+
+    def import_espanso_entries(self, entries):
+        """Merge parsed Espanso entries; returns (imported, skipped).
+
+        Conflicting triggers are skipped, never overwritten. One undo
+        entry covers the whole import. Imported snippets are enabled,
+        in category "Espanso", tagged "espanso".
+        """
+        if not self.daemon:
+            return 0, 0
+        with self.daemon.snippets_lock:
+            existing = dict(self.daemon.snippets)
+        to_import = {}
+        skipped = 0
+        for entry in entries:
+            trigger = entry.get("trigger", "")
+            if not trigger or trigger in existing or trigger in to_import:
+                skipped += 1
+                continue
+            snippet = {
+                "type": "variable",
+                "value": entry.get("replace", ""),
+                "category": "Espanso",
+                "tags": ["espanso"],
+                "usage": 0,
+            }
+            if entry.get("label"):
+                snippet["note"] = entry["label"]
+            to_import[trigger] = snippet
+        if to_import:
+            self._push_undo(f"Import Espanso file ({len(to_import)} snippet(s))")
+            self.daemon.import_snippets(to_import)
+            self.refresh_snippet_list()
+            self.find_missing_user_settings(notify=False)
+        message = f"Imported Espanso: {len(to_import)} snippet(s)"
+        if skipped:
+            message += f", {skipped} skipped (already in library)"
+        self.statusBar().showMessage(message, 4000)
+        return len(to_import), skipped
 
     def save_user_config(self):
         if not self.daemon:
@@ -1420,6 +1507,7 @@ class TexterUI(QMainWindow):
         self.text_size_combo.currentIndexChanged.connect(self._on_display_pref_changed)
         prefs_layout.addRow("Text size:", self.text_size_combo)
         self.theme_combo = QComboBox()
+        self.theme_combo.addItem("System", "system")
         for _key, _label in THEME_ORDER:
             self.theme_combo.addItem(_label, _key)
         self.theme_combo.setToolTip("Color theme for the manager window")
@@ -1587,6 +1675,7 @@ class TexterUI(QMainWindow):
         self.library_menu.addAction("Export JSON", self.export_json)
         self.library_menu.addSeparator()
         self.library_menu.addAction("Import Pack", self.import_pack)
+        self.library_menu.addAction("Import Espanso file...", self.import_espanso)
         self.library_menu.addAction("Export Pack", self.export_pack)
         self.library_menu.addAction("Import starter snippets", self.import_starter_snippets)
         self.library_menu.addSeparator()
@@ -1662,6 +1751,25 @@ class TexterUI(QMainWindow):
         self._update_settings_dirty()
         self._sync_picker_button_label()
 
+    def _preview_render(self, raw, snippet):
+        """render_template for previews, tolerating older daemons.
+
+        Counters show the current next value without consuming it.
+        A daemon without the counter_state keyword (older builds, test
+        fakes) falls back to a plain render instead of crashing.
+        """
+        render = getattr(self.daemon, "render_template", None)
+        if not callable(render):
+            return raw
+        try:
+            return render(
+                raw,
+                counter_state={"next": snippet.get("counter"),
+                               "consume": False},
+            )
+        except TypeError:
+            return render(raw)
+
     def get_expansion_preview(self, snippet):
         if not self.daemon:
             return ""
@@ -1672,9 +1780,10 @@ class TexterUI(QMainWindow):
             # so the preview (and the table Preview column) shows what
             # will actually expand. Missing placeholders render
             # literally, as in render_template without a prompt handler.
+            # Counters show the current next value without consuming it.
             raw = snippet.get("value", "")
             try:
-                return self.daemon.render_template(raw)
+                return self._preview_render(raw, snippet)
             except Exception:
                 return raw
         elif snippet_type == "template":
@@ -1682,7 +1791,13 @@ class TexterUI(QMainWindow):
             raw = snippet.get("languages", {}).get(current_lang)
             if not raw:
                 return f"(No template for {current_lang})"
-            return self.daemon.render_template(raw)
+            try:
+                return self._preview_render(raw, snippet)
+            except Exception:
+                return raw
+        elif snippet_type == "shell":
+            # Never execute for a preview: show the command instead.
+            return f"Runs: {snippet.get('value', '')}"
         elif snippet_type == "command":
             return f"Command: {snippet.get('action')}"
         return ""
@@ -1912,20 +2027,55 @@ class TexterUI(QMainWindow):
                 _combo.blockSignals(False)
 
     def _set_theme_state(self, theme):
-        """Apply a theme's stylesheet and painted colors (no refresh)."""
-        theme = theme if theme in THEME_COLORS else "dark"
+        """Apply a theme's stylesheet and painted colors (no refresh).
+
+        `theme` is the saved value and may be "system": the resolved
+        concrete theme drives the stylesheet and colors, while
+        self._theme keeps the saved value so the combo and QSettings
+        keep showing "System".
+        """
+        theme = theme if theme in THEME_COLORS or theme == "system" else "dark"
         self._theme = theme
-        colors = THEME_COLORS[theme]
+        resolved = resolved_theme(theme)
+        self._resolved_theme = resolved
+        colors = THEME_COLORS[resolved]
         app = QApplication.instance()
         if app is not None:
-            app.setStyleSheet(STYLESHEETS[theme])
+            app.setStyleSheet(STYLESHEETS[resolved])
         self.TYPE_COLORS = {
             "command": colors["type_command"],
             "template": colors["type_template"],
             "variable": colors["type_variable"],
+            "shell": colors["type_shell"],
         }
         self.DISABLED_COLOR = colors["disabled"]
         apply_tree_theme(colors["tree_bg"], colors["hover"])
+        self._connect_system_theme_signal()
+
+    def _connect_system_theme_signal(self):
+        """Follow OS light/dark flips while the saved theme is System.
+
+        Connected once; the handler no-ops unless "system" is saved.
+        Guarded throughout: older Qt builds may not have styleHints
+        or the colorSchemeChanged signal.
+        """
+        if getattr(self, "_system_theme_connected", False):
+            return
+        try:
+            app = QApplication.instance()
+            hints = app.styleHints() if app is not None else None
+            signal = getattr(hints, "colorSchemeChanged", None) if hints is not None else None
+            if signal is None:
+                return
+            signal.connect(self._on_system_color_scheme_changed)
+            self._system_theme_connected = True
+        except Exception:
+            pass
+
+    def _on_system_color_scheme_changed(self, *args):
+        """OS scheme flipped: re-apply when the saved theme is System."""
+        if getattr(self, "_theme", "dark") == "system":
+            self._apply_theme("system")
 
     def _apply_theme(self, theme):
         """Switch theme live: persist, restyle, rebuild list + preview."""
@@ -2205,7 +2355,7 @@ class TexterUI(QMainWindow):
         if _text_size in ("small", "medium", "large"):
             self._text_size = _text_size
         _theme = settings.value("theme")
-        if _theme in THEME_COLORS:
+        if _theme in THEME_COLORS or _theme == "system":
             self._set_theme_state(_theme)
         self._sync_display_pref_combos()
         self._apply_display_prefs()
@@ -2438,6 +2588,8 @@ class TexterUI(QMainWindow):
             if not raw:
                 return f"(No template for {current_lang})"
             return raw
+        if snippet_type == "shell":
+            return snippet.get("value", "")
         return f"Command: {snippet.get('action')}"
 
     def _preview_missing_names(self, raw):
@@ -2470,9 +2622,9 @@ class TexterUI(QMainWindow):
             # resolvable: orange, never the missing red. Missing
             # placeholders are links: clicking one in the raw preview
             # fills it in (item 7).
-            _colors = THEME_COLORS.get(
-                getattr(self, "_theme", "dark"), THEME_COLORS["dark"]
-            )
+            _colors = THEME_COLORS[
+                resolved_theme(getattr(self, "_theme", "dark"))
+            ]
             color = (
                 _colors["preview_present"]
                 if name is None or name not in missing
@@ -2484,7 +2636,8 @@ class TexterUI(QMainWindow):
             return inner
 
         body = re.sub(
-            r"\{choice:[^}]+\}|\{([A-Za-z_][A-Za-z0-9_]*)(?:[+-]\d+)?\}",
+            r"\{choice:[^}]+\}|\{random:[^}]+\}|\{counter(?::[0-9]+)?\}"
+            r"|\{([A-Za-z_][A-Za-z0-9_]*)(?:[+-]\d+)?(?::[^}]*)?\}",
             _wrap, escaped,
         )
         return f"<pre>{body}</pre>"
@@ -2536,9 +2689,9 @@ class TexterUI(QMainWindow):
                 "Missing settings: " + ", ".join(f"{{{n}}}" for n in missing)
                 + " - no value set; expansion will prompt for them." + _hint
             )
-            _colors = THEME_COLORS.get(
-                getattr(self, "_theme", "dark"), THEME_COLORS["dark"]
-            )
+            _colors = THEME_COLORS[
+                resolved_theme(getattr(self, "_theme", "dark"))
+            ]
             self.preview_missing_label.setStyleSheet(
                 "color: " + _colors["preview_missing"] + ";"
             )
@@ -3006,6 +3159,8 @@ class TexterUI(QMainWindow):
             fields.append(" ".join(str(v) for v in snippet.get("languages", {}).values()))
         elif snippet_type == "command":
             fields.append(snippet.get("action", ""))
+        elif snippet_type == "shell":
+            fields.append(snippet.get("value", ""))
         pattern = self._get_search_pattern(query)
         if pattern is not None:
             return any(pattern.search(f or "") for f in fields)
@@ -3184,6 +3339,7 @@ class TexterUI(QMainWindow):
         "command": "#f38ba8",   # red
         "template": "#89b4fa",  # blue
         "variable": "#a6e3a1",  # green
+        "shell": "#89dceb",     # sky
     }
     DISABLED_COLOR = "#9a9aa5"  # briefing muted for disabled snippets
 
@@ -3191,9 +3347,9 @@ class TexterUI(QMainWindow):
         """Row text color for a snippet type, following the active theme."""
         if not enabled:
             return QColor(self.DISABLED_COLOR)
-        fallback = THEME_COLORS.get(
-            getattr(self, "_theme", "dark"), THEME_COLORS["dark"]
-        )["text"]
+        fallback = THEME_COLORS[
+            resolved_theme(getattr(self, "_theme", "dark"))
+        ]["text"]
         return QColor(self.TYPE_COLORS.get(snippet_type, fallback))
 
     def _add_snippet_item(self, parent, trigger, snippet):

@@ -4,7 +4,7 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 from daemon import Daemon
 from ui import TexterUI
-from stylesheet import STYLESHEETS
+from stylesheet import STYLESHEETS, resolved_theme
 
 
 def main():
@@ -13,7 +13,7 @@ def main():
     # Saved theme (Dark by default); the manager's Theme combo in
     # Preferences changes it live and persists it here.
     theme = QSettings("Landaluce", "Textr").value("theme", "dark")
-    app.setStyleSheet(STYLESHEETS.get(theme, STYLESHEETS["dark"]))
+    app.setStyleSheet(STYLESHEETS[resolved_theme(theme)])
 
     daemon = Daemon()
     window = TexterUI(daemon=daemon)
