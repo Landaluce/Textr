@@ -73,6 +73,10 @@ class Daemon:
         _data_dir = os.path.dirname(self.snippets_file) or "."
         self.backup_dir = os.path.join(_data_dir, "backups")
         self.trash_file = os.path.join(_data_dir, "trash.json")
+        # Daily usage log lives next to snippets.json too (see
+        # _record_usage / _save_usage_log).
+        self.usage_log_file = os.path.join(_data_dir, "usage_log.json")
+        self.usage_log = self._load_usage_log()
         self.snippets = {}
         # Guards all access to self.snippets: the UI thread mutates it while
         # the keyboard listener iterates it on every keystroke.
@@ -474,7 +478,48 @@ class Daemon:
             except Exception as e:
                 print(f"Failed to load snippets: {e}")
 
-    def save_snippets(self):
+    def _load_usage_log(self):
+        """Daily expansion counts: {"YYYY-MM-DD": {trigger: count}}."""
+        path = getattr(self, "usage_log_file", None)
+        if not path:
+            return {}
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return {d: c for d, c in data.items() if isinstance(c, dict)}
+        except Exception:
+            pass
+        return {}
+
+    @staticmethod
+    def _prune_usage_log(log, days=90):
+        """Keep only the newest `days` date keys (YYYY-MM-DD)."""
+        today = datetime.now().date()
+        cutoff = today - timedelta(days=days - 1)
+        kept = {}
+        for key, counts in (log or {}).items():
+            try:
+                when = datetime.strptime(key, "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue
+            if when >= cutoff:
+                kept[key] = counts
+        return kept
+
+    def _save_usage_log(self):
+        """Persist the daily log, pruned to the newest 90 days."""
+        if not getattr(self, "usage_log_file", None):
+            return
+        try:
+            log = self._prune_usage_log(getattr(self, "usage_log", None))
+            self.usage_log = log
+            with open(self.usage_log_file, "w") as f:
+                json.dump(log, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save usage log: {e}")
+
+    def save_snippets(self, backup=True):
         try:
             with self.snippets_lock:
                 items = list(self.snippets.items())
@@ -491,11 +536,16 @@ class Daemon:
 
                 snippets_to_save[trigger] = clean_snippet
 
-            self._backup_file(self.snippets_file, "snippets")
+            if backup:
+                self._backup_file(self.snippets_file, "snippets")
             with open(self.snippets_file, "w") as f:
                 json.dump(snippets_to_save, f, indent=2)
 
             print(f"Saved {len(snippets_to_save)} snippets to {self.snippets_file}")
+            # Flush the daily log with every library save (see
+            # _record_usage: a crash loses only the current session's
+            # daily counts, never the totals in snippets.json).
+            self._save_usage_log()
         except Exception as e:
             print(f"Failed to save snippets: {e}")
 
@@ -645,10 +695,13 @@ class Daemon:
     # Placeholders that are always resolved by the daemon itself and must
     # never be treated as custom settings or prompted for.
     BUILTIN_PLACEHOLDERS = frozenset(
-        {"name", "email", "date", "time", "iso", "week", "clipboard", "cursor"}
+        {"name", "email", "date", "time", "iso", "week", "clipboard", "cursor",
+         "counter", "random"}
     )
 
     CHOICE_RE = re.compile(r"\{choice:([^}|]+(?:\|[^}|]+)+)\}")
+    RANDOM_RE = re.compile(r"\{random:([^}|]+(?:\|[^}|]+)+)\}")
+    COUNTER_RE = re.compile(r"\{counter(?::([^\}]*))?\}")
 
     def choice_placeholders(self, text):
         """Choice placeholders in `text`, in order, de-duplicated.
@@ -690,15 +743,26 @@ class Daemon:
                     missing.append(key)
         return missing
 
-    def render_template(self, text, prompt_values=None):
+    def render_template(self, text, prompt_values=None, counter_state=None,
+                        allow_random=False):
         """Render placeholders, with relative dates and prompt values.
 
         Relative dates: {date+7} / {date-3} shift by days (strftime with
         the configured date format); {iso+7} shifts by days; {time+2}
-        shifts by hours; {week+1} shifts by weeks. Unknown keys, and
-        offset keys that are not date/time/iso/week, render unchanged.
-        prompt_values (from prompt-on-expand) wins over a custom setting
-        for non-built-in keys.
+        shifts by hours; {week+1} shifts by weeks. A format may follow
+        the key and offset: {date:%d %b %Y} / {date+7:%d %b %Y} apply
+        strftime to the shifted date ({week} with a format applies
+        strftime to the shifted date too). Unknown keys, offset keys
+        that are not date/time/iso/week, non-date keys with a format,
+        and empty/invalid formats render unchanged.
+        {random:A|B} picks one option at random on a real expansion
+        (allow_random); previews render the first option so the text
+        never flickers on refresh. {counter} / {counter:START} render
+        the snippet's next counter value: counter_state {"next": int
+        or None, "consume": bool} carries the stored value in and the
+        new value out; previews pass consume=False and never increment
+        or persist. prompt_values (from prompt-on-expand) wins over a
+        custom setting for non-built-in keys.
         """
         context = self.get_context()
         try:
@@ -718,9 +782,66 @@ class Daemon:
 
         text = self.CHOICE_RE.sub(_choice, text or "")
 
+        def _random(match):
+            options = [o.strip() for o in match.group(1).split("|")]
+            options = [o for o in options if o]
+            if len(options) < 2:
+                return match.group(0)
+            if allow_random:
+                return random.choice(options)
+            return options[0]
+
+        text = self.RANDOM_RE.sub(_random, text)
+
+        def _counter(match):
+            arg = match.group(1)
+            if arg is None:
+                start = 1
+            else:
+                try:
+                    start = int(arg.strip())
+                except (TypeError, ValueError):
+                    return match.group(0)
+            if counter_state is not None:
+                current = counter_state.get("next")
+                if current is not None:
+                    try:
+                        current = int(current)
+                    except (TypeError, ValueError):
+                        current = None
+                value = start if current is None else current
+                if counter_state.get("consume"):
+                    counter_state["next"] = value + 1
+                    counter_state["consumed"] = True
+                return str(value)
+            return str(start)
+
+        text = self.COUNTER_RE.sub(_counter, text)
+
         def replace_var(match):
             key = match.group(1)
             offset = match.group(2)
+            fmt = match.group(3)
+            if fmt is not None:
+                if not fmt:
+                    return match.group(0)
+                if key not in ("date", "time", "iso", "week"):
+                    return match.group(0)
+                try:
+                    delta = int(offset) if offset else 0
+                except ValueError:
+                    return match.group(0)
+                now = datetime.now()
+                if key == "date" or key == "iso":
+                    when = now + timedelta(days=delta)
+                elif key == "time":
+                    when = now + timedelta(hours=delta)
+                else:  # week
+                    when = now + timedelta(weeks=delta)
+                try:
+                    return when.strftime(fmt)
+                except Exception:
+                    return match.group(0)
             if offset:
                 try:
                     delta = int(offset)
@@ -743,7 +864,7 @@ class Daemon:
             return context.get(key, f"{{{key}}}")
 
         return re.sub(
-            r"\{([A-Za-z_][A-Za-z0-9_]*)([+-]\d+)?\}", replace_var, text
+            r"\{([A-Za-z_][A-Za-z0-9_]*)([+-]\d+)?(?::([^}]*))?\}", replace_var, text
         )
 
     def _capture_active_window(self):
@@ -784,28 +905,34 @@ class Daemon:
         except Exception:
             return False
 
-    def render_with_prompt(self, text):
+    def render_with_prompt(self, text, counter_state=None):
         """Render `text`, prompting for missing values when a UI is attached.
 
         Returns the rendered text, or None when the user cancels the
         prompt (the caller must then abort the expansion, not insert a
         half-filled snippet). With no prompt_handler, behaves exactly like
-        render_template (missing placeholders stay literal).
+        render_template (missing placeholders stay literal). This is a
+        real expansion, so random picks randomize and counters consume
+        (see render_template); previews call render_template directly.
         """
         missing = self.missing_placeholders(text)
         choices = self.choice_placeholders(text)
         if (not missing and not choices) or not self.prompt_handler:
-            return self.render_template(text)
+            return self.render_template(
+                text, counter_state=counter_state, allow_random=True)
         # Capture the target window BEFORE the prompt dialog opens.
         self._prompt_target_window = self._capture_active_window()
         try:
             values = self.prompt_handler({"missing": missing, "choices": choices})
         except Exception as e:
             print(f"Prompt failed: {e}")
-            return self.render_template(text)
+            return self.render_template(
+                text, counter_state=counter_state, allow_random=True)
         if values is None:
             return None
-        return self.render_template(text, prompt_values=values)
+        return self.render_template(
+            text, prompt_values=values, counter_state=counter_state,
+            allow_random=True)
 
     def replace(self, trigger, expansion):
         # {cursor} marks where the caret should end up: the text after it is
@@ -1101,6 +1228,86 @@ class Daemon:
             return None
         return random.choice(adj)
 
+    def run_shell_command(self, command):
+        """Run a shell snippet's command; return stdout, "" on failure.
+
+        Only commands the user typed into his own snippets ever run
+        here: nothing from the clipboard, the network, or another
+        application reaches this call. A timeout, a non-zero exit, or
+        any error consumes the trigger and inserts nothing.
+        """
+        try:
+            result = subprocess.run(
+                command, shell=True, capture_output=True, text=True, timeout=5
+            )
+        except subprocess.TimeoutExpired:
+            print(f"Shell snippet timed out after 5s: {command!r}")
+            return ""
+        except Exception as e:
+            print(f"Shell snippet failed: {command!r}: {e}")
+            return ""
+        if result.returncode != 0:
+            print(f"Shell snippet exited {result.returncode}: {command!r}")
+            return ""
+        return result.stdout.rstrip("\n")
+
+    def _render_snippet_text(self, item, raw):
+        """Render `raw` for a real expansion, consuming/persisting counters.
+
+        Returns the rendered text, or None when the user cancels the
+        prompt (the caller must then abort the expansion). A consumed
+        counter is persisted with a backup-free write so a quit or a
+        crash never repeats a number.
+        """
+        stored = item.get("counter") if isinstance(item, dict) else None
+        try:
+            stored = int(stored) if stored is not None else None
+        except (TypeError, ValueError):
+            stored = None
+        state = {"next": stored, "consume": True}
+        rendered = self.render_with_prompt(raw, counter_state=state)
+        if rendered is not None and state.get("consumed"):
+            item["counter"] = state["next"]
+            self.save_snippets(backup=False)
+        return rendered
+
+    def render_insert_text(self, snippet, prompt_values=None, raw=None):
+        """Final text for a picker/tray insert of one snippet.
+
+        Shell snippets execute here, exactly once, at insert time;
+        variable/template snippets render with the given prompt
+        values, real random picks, and counter consumption (persisted).
+        Previews must never call this: they use render_template
+        directly, which never executes a command, never randomizes,
+        and never consumes a counter.
+        `prompt_values` come from the picker's synchronous prompt.
+        `raw` overrides the snippet's expansion text (the tray path
+        resolves the template language from its combo, not the daemon).
+        """
+        if not isinstance(snippet, dict):
+            return ""
+        if snippet.get("type") == "shell":
+            return self.run_shell_command(snippet.get("value", ""))
+        if raw is None:
+            if snippet.get("type") == "variable":
+                raw = snippet.get("value", "")
+            else:
+                raw = (snippet.get("languages", {}) or {}).get(
+                    self.current_language, "") or ""
+        stored = snippet.get("counter")
+        try:
+            stored = int(stored) if stored is not None else None
+        except (TypeError, ValueError):
+            stored = None
+        state = {"next": stored, "consume": True}
+        final = self.render_template(
+            raw, prompt_values=prompt_values, counter_state=state,
+            allow_random=True)
+        if state.get("consumed"):
+            snippet["counter"] = state["next"]
+            self.save_snippets(backup=False)
+        return final
+
     def is_valid_trigger(self, trigger):
         with self.snippets_lock:
             item = self.snippets.get(trigger)
@@ -1128,14 +1335,17 @@ class Daemon:
                 self._press_backspace()
             return None
 
+        if item_type == "shell":
+            return self.run_shell_command(item.get("value", ""))
+
         if item_type == "variable":
-            return self.render_with_prompt(item.get("value", ""))
+            return self._render_snippet_text(item, item.get("value", ""))
 
         if item_type == "template":
             raw = item.get("languages", {}).get(self.current_language)
             if not raw:
                 return None
-            return self.render_with_prompt(raw)
+            return self._render_snippet_text(item, raw)
 
         return None
 
@@ -1206,6 +1416,15 @@ class Daemon:
                 snippet["usage"] = int(snippet.get("usage", 0)) + 1
                 snippet["last_used"] = datetime.now().isoformat(timespec="seconds")
                 self._usage_stamp += 1
+            # Daily log: per-trigger counts per day, flushed to disk by
+            # save_snippets(). A crash loses only the current session's
+            # daily counts; the totals in snippets.json are unaffected.
+            log = getattr(self, "usage_log", None)
+            if log is None:
+                log = self.usage_log = {}
+            day = datetime.now().date().isoformat()
+            day_counts = log.setdefault(day, {})
+            day_counts[trigger] = int(day_counts.get(trigger, 0) or 0) + 1
 
     def usage_stamp(self):
         """Monotonic counter, bumped on every recorded expansion."""

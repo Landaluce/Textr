@@ -5,7 +5,7 @@ Text expansion for Linux, Windows, and macOS. Type a short trigger anywhere and 
 ## Features
 
 - **Global trigger detection** — works in any application via a background keyboard daemon
-- **Three snippet types** — static text (`variable`), per-language code (`template`), and actions (`command`)
+- **Four snippet types** — static text (`variable`), per-language code (`template`), actions (`command`), and shell commands (`shell`) whose output is inserted
 - **Two insertion modes** — fast clipboard paste (default) or human-like typing ("Human Typing")
 - **Word-boundary matching** — triggers only fire after whitespace/punctuation, never mid-word
 - **Prefix disambiguation** — when one trigger is the prefix of another (`:d` vs `:dt`), expansion waits until the next key reveals which one you meant; the longer trigger wins
@@ -23,6 +23,11 @@ Text expansion for Linux, Windows, and macOS. Type a short trigger anywhere and 
 - **Pack export/import** — export a chosen set of snippets as a `.textr-pack` JSON file; importing a pack never overwrites silently (skip, rename, or overwrite conflicts explicitly)
 - **Snippet cleanup** — find snippets with no recorded usage and triggers expanding to identical text, then delete (to Trash) or disable them in bulk
 - **Relative dates** — `{date+7}`, `{date-3}`, `{iso+1}`, `{time+2}` (hours), `{week+1}` shift the built-in date/time placeholders
+- **Per-placeholder date formats** — `{date:%d %b %Y}` / `{date+7:%d %b %Y}` format one placeholder without changing the global date/time formats
+- **Choice, counter & random placeholders** — `{choice:Formal|Friendly}` asks at expansion time, `{counter}` inserts a rising number, `{random:heads|tails}` picks one option at random
+- **Daily usage log + chart** — expansions are counted per day in `usage_log.json`; the Usage statistics dialog shows expansions today, in the last 30 days, and a 30-day bar chart
+- **System theme** — Theme: System follows the OS light/dark setting live, alongside the eight manual themes
+- **Espanso import** — import an Espanso match file (`.yml`/`.yaml`) from the Library menu; conflicting triggers are skipped, never overwritten
 
 ## Requirements
 
@@ -106,6 +111,7 @@ Edit/Delete only fire when the snippet list has focus, so they never trigger whi
 | `variable` | Expands to static text, e.g. trigger `sig` → your signature |
 | `template` | Expands to language-specific code chosen by the Programming language selector |
 | `command` | Performs an action (no text inserted), e.g. `:pause` toggles pause/resume |
+| `shell` | Runs a shell command and inserts its stdout, e.g. trigger `:ip` with value `hostname -I` |
 
 Snippet JSON structure:
 
@@ -125,6 +131,17 @@ Templates use `{"python": "...", "javascript": "..."}` under `"languages"` and s
 
 Put `{cursor}` anywhere in an expansion to leave the caret there after insertion instead of at the end — handy for filling in the middle of a snippet, e.g. `function f() { {cursor} }`.
 
+### Shell snippets
+
+A `shell` snippet's value is a command run with the system shell at expansion time; its stdout (trailing newlines stripped) is inserted. A command that times out (5 seconds), exits non-zero, or fails inserts nothing and consumes the trigger. Only commands you typed into your own snippets ever run — nothing from the clipboard, the network, or another application reaches the shell. Previews (manager, Add/Edit dialog, picker rows) never execute the command: they show `Runs: <command>`. Imported shell snippets (packs) are forced disabled so you review each command before it can run.
+
+### Placeholders
+
+- `{choice:Formal|Friendly}` — at expansion time a dropdown asks which option to use (first option in previews). Identical choice texts share one dropdown.
+- `{date:%d %b %Y}`, `{time:%H:%M}`, `{iso:%Y}`, `{week:%V}` — a strftime format after the key (combinable with offsets: `{date+7:%d %b %Y}`). An empty or non-date format leaves the placeholder unchanged.
+- `{counter}` / `{counter:100}` — inserts the snippet's next counter value and increments it. The value is stored per snippet and persisted immediately (without a backup write) so a quit or crash never repeats a number. Previews show the current next value without incrementing. Pack export strips the counter; imported snippets start fresh.
+- `{random:heads|tails}` — picks one option at random on a real expansion (needs two or more non-empty options); previews always show the first option.
+
 ### Built-in commands
 
 Commands are just snippets of type `command` with an `action` field:
@@ -139,6 +156,14 @@ Commands are just snippets of type `command` with an `action` field:
 | `ui` / `top` / `hide` | Show, raise, or hide the manager window |
 | `restart` / `shutdown` | Restart or quit the app |
 
+### Usage statistics
+
+The Library menu's **Usage statistics** dialog shows totals from the stored `usage`/`last_used` data plus the daily log: expansions today and in the last 30 days, with a 30-day bar chart in the active theme's accent color. The log keeps the newest 90 days.
+
+### Importing from Espanso
+
+**Library → Import Espanso file...** reads an Espanso match file and imports each match as a `variable` snippet (category `Espanso`, tag `espanso`, `label:` kept as the note). Plain, single/double-quoted, literal-block (`|`) and folded (`>`) scalars are supported; entries missing a trigger or a replace are skipped, triggers already in the library are skipped (never overwritten), and Espanso `{{...}}` variables are left as literal text.
+
 ## Configuration & data files
 
 Data files are looked up in this order:
@@ -152,6 +177,7 @@ Data files are looked up in this order:
  
 - `config.json` — user profile (`name`, `email`, `layout`, `language`, `paste_hotkey`, `date_format`, `time_format`) plus custom settings (`user_settings`)
 - `snippets.json` — all snippet definitions
+- `usage_log.json` — per-day expansion counts (`{"YYYY-MM-DD": {trigger: count}}`, newest 90 days); written whenever snippets are saved
 
 The paste shortcut used in clipboard mode defaults to `Ctrl+Shift+V` (`Cmd+V` on fresh macOS installs) and is configurable
 via **Settings → Paste shortcut** (e.g. `ctrl+insert`); if a terminal swallows the paste,

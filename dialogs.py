@@ -7,7 +7,7 @@ import os
 import shutil
 import threading
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from copy import deepcopy
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -19,13 +19,13 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox,
     QRadioButton, QScrollArea, QFrame, QInputDialog
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect, QSettings, QEvent
+from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QRect, QSettings, QEvent, QSize
 from PySide6.QtGui import (
     QIcon, QAction, QPixmap, QPainter, QColor, QPalette, QPainterPath,
-    QShortcut, QKeySequence,
+    QShortcut, QKeySequence, QCursor,
 )
 
-from stylesheet import THEME_COLORS
+from stylesheet import THEME_COLORS, resolved_theme
 
 from snippet_helpers import (
     BUILTIN_PLACEHOLDERS,
@@ -33,6 +33,54 @@ from snippet_helpers import (
     _normalized_expansion,
     history_entry,
 )
+
+
+def _place_at_cursor(dialog):
+    """Put `dialog` on the screen under the mouse cursor, fully on-screen.
+
+    Prompt dialogs open while the user is typing in another window;
+    Qt's default placement can leave them behind that window (or on
+    the wrong screen), and the expansion worker then waits on an
+    unseen dialog. Centering on the cursor keeps the dialog where the
+    user is looking; clamping to the screen's available geometry keeps
+    every edge visible.
+    """
+    try:
+        pos = QCursor.pos()
+    except Exception:
+        return
+    app = QApplication.instance()
+    screen = None
+    if app is not None:
+        try:
+            screen = app.screenAt(pos)
+        except Exception:
+            screen = None
+    if screen is None and app is not None:
+        try:
+            screen = app.primaryScreen()
+        except Exception:
+            screen = None
+    if screen is None:
+        return
+    try:
+        avail = screen.availableGeometry()
+    except Exception:
+        return
+    try:
+        dialog.adjustSize()
+    except Exception:
+        pass
+    size = dialog.sizeHint()
+    if size.width() <= 0 or size.height() <= 0:
+        size = dialog.size()
+    if size.width() <= 0 or size.height() <= 0:
+        return
+    x = pos.x() - size.width() // 2
+    y = pos.y() - size.height() // 2
+    x = max(avail.left(), min(x, avail.right() - size.width()))
+    y = max(avail.top(), min(y, avail.bottom() - size.height()))
+    dialog.move(x, y)
 
 
 class AddSnippetDialog(QDialog):
@@ -78,7 +126,7 @@ class AddSnippetDialog(QDialog):
 
         # Type
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["variable", "template", "command"])
+        self.type_combo.addItems(["variable", "template", "command", "shell"])
         self.type_combo.currentTextChanged.connect(self.on_type_changed)
         layout.addRow("Type:", self.type_combo)
 
@@ -134,7 +182,7 @@ class AddSnippetDialog(QDialog):
             self.type_combo.setCurrentText(self.snippet.get("type", "variable"))
             self.on_type_changed(self.snippet.get("type", "variable"))
 
-            if self.snippet.get("type") == "variable":
+            if self.snippet.get("type") in ("variable", "shell"):
                 self.value_input.setText(self.snippet.get("value", ""))
             elif self.snippet.get("type") == "template":
                 langs = self.snippet.get("languages", {})
@@ -216,7 +264,9 @@ class AddSnippetDialog(QDialog):
         self.action_input.setHidden(type_val != "command")
         self.command_value_input.setHidden(type_val != "command")
         if hasattr(self, "placeholder_row"):
-            self.placeholder_row.setHidden(type_val == "command")
+            # Shell commands are literal text, like command actions:
+            # no placeholders to insert.
+            self.placeholder_row.setHidden(type_val in ("command", "shell"))
 
     def eventFilter(self, watched, event):
         """Offer the placeholder popup when "{" is typed in a value field."""
@@ -236,6 +286,7 @@ class AddSnippetDialog(QDialog):
             if isinstance(config, dict):
                 names.extend(sorted((config.get("user_settings", {}) or {}).keys()))
         names.extend(["date+7", "date-7", "iso+1", "time+2", "week+1"])
+        names.append("date:%d %b %Y")
         names.append("choice:Formal|Friendly")
         seen = set()
         out = []
@@ -299,7 +350,8 @@ class AddSnippetDialog(QDialog):
         for name in re.findall(
             r"\{([A-Za-z_][A-Za-z0-9_]*)(?:[+-]\d+)?\}", raw or ""
         ):
-            builtins = {"name", "email", "date", "time", "iso", "week", "clipboard", "cursor"}
+            builtins = {"name", "email", "date", "time", "iso", "week", "clipboard", "cursor",
+                        "counter", "random"}
             if name not in builtins and name not in names:
                 names.append(name)
         choices = []
@@ -348,6 +400,10 @@ class AddSnippetDialog(QDialog):
         if json_error:
             self.tryit_output.setPlainText("(Invalid JSON for programming languages)")
             return
+        if self.type_combo.currentText() == "shell":
+            # Never execute for a preview: show the command instead.
+            self.tryit_output.setPlainText(f"Runs: {raw}")
+            return
         values = {}
         for key, widget in self._tryit_inputs.items():
             if isinstance(widget, QComboBox):
@@ -367,7 +423,7 @@ class AddSnippetDialog(QDialog):
     def _raw_expansion_text(self):
         """(raw text, json_error) for the type currently being edited."""
         snippet_type = self.type_combo.currentText()
-        if snippet_type == "variable":
+        if snippet_type in ("variable", "shell"):
             return self.value_input.toPlainText(), False
         if snippet_type == "template":
             raw_json = self.languages_input.toPlainText().strip()
@@ -415,6 +471,9 @@ class AddSnippetDialog(QDialog):
         snippet_type = self.type_combo.currentText()
         if json_error:
             preview = "(Invalid JSON for programming languages)"
+        elif snippet_type == "shell":
+            # Never execute for a preview: show the command instead.
+            preview = f"Runs: {raw}"
         elif snippet_type == "command":
             preview = raw
         elif self.daemon is not None and hasattr(self.daemon, "render_template"):
@@ -473,7 +532,7 @@ class AddSnippetDialog(QDialog):
         if not self.enabled_check.isChecked():
             snippet["enabled"] = False
 
-        if snippet_type == "variable":
+        if snippet_type in ("variable", "shell"):
             snippet["value"] = self.value_input.toPlainText().strip()
         elif snippet_type == "template":
             try:
@@ -532,6 +591,20 @@ class PromptValuesDialog(QDialog):
         layout.addWidget(buttons)
         if self._edits:
             list(self._edits.values())[0].setFocus()
+        elif self._choice_edits:
+            # Choices only (no line edits): focus the first dropdown
+            # so the dialog is usable from the keyboard at once.
+            list(self._choice_edits.values())[0].setFocus()
+        _place_at_cursor(self)
+
+    def showEvent(self, event):
+        """Come to the front when shown: the user is typing elsewhere."""
+        super().showEvent(event)
+        try:
+            self.raise_()
+            self.activateWindow()
+        except Exception:
+            pass
 
     def values(self):
         out = {k: e.text() for k, e in self._edits.items()}
@@ -547,7 +620,7 @@ class QuickInsertDialog(QDialog):
     """Fuzzy snippet picker, opened anywhere via Ctrl+Alt+Space.
 
     Standalone and stays-on-top so closing it returns focus to the
-    application the user was in. Only variable/template snippets are
+    application the user was in. Only variable/template/shell snippets are
     listed (commands act on the manager, they do not insert text).
     """
 
@@ -593,6 +666,7 @@ class QuickInsertDialog(QDialog):
             layout.addWidget(warn)
         self._refresh_list()
         self.search.setFocus()
+        _place_at_cursor(self)
 
     def _candidates(self):
         if not self.daemon:
@@ -603,11 +677,11 @@ class QuickInsertDialog(QDialog):
         for trigger, snippet in items:
             if not isinstance(snippet, dict):
                 continue
-            if snippet.get("type") not in ("variable", "template"):
+            if snippet.get("type") not in ("variable", "template", "shell"):
                 continue
             if not self.daemon._enabled(snippet):
                 continue
-            if snippet.get("type") == "variable":
+            if snippet.get("type") in ("variable", "shell"):
                 raw = snippet.get("value", "")
             else:
                 raw = (snippet.get("languages", {}) or {}).get(
@@ -617,8 +691,14 @@ class QuickInsertDialog(QDialog):
         return out
 
     def _add_picker_item(self, trigger, snippet, raw):
-        """One picker row: star, trigger, type, preview, usage."""
-        preview = " ".join(str(raw).split())[:80]
+        """One picker row: star, trigger, type, preview, usage.
+
+        Shell rows never execute: they show the command text.
+        """
+        if snippet.get("type") == "shell":
+            preview = "Runs: " + " ".join(str(raw).split())[:72]
+        else:
+            preview = " ".join(str(raw).split())[:80]
         usage = int(snippet.get("usage", 0) or 0)
         usage_text = f"used {usage}x" if usage else "never used"
         star = "\u2605 " if snippet.get("favorite") else ""
@@ -640,7 +720,7 @@ class QuickInsertDialog(QDialog):
         # Orange headers are readable on dark; on light they need the
         # darker orange, read from the same saved theme as the manager.
         _theme = QSettings("Landaluce", "Textr").value("theme", "dark")
-        _colors = THEME_COLORS.get(_theme, THEME_COLORS["dark"])
+        _colors = THEME_COLORS[resolved_theme(_theme)]
         item.setForeground(QColor(_colors["picker_header"]))
         self.list_widget.addItem(item)
         return item
@@ -746,6 +826,21 @@ class QuickInsertDialog(QDialog):
         if not isinstance(snippet, dict):
             self.reject()
             return
+        if snippet.get("type") == "shell":
+            raw = snippet.get("value", "")
+            # Shell snippets execute exactly once, at accept time, via
+            # the daemon helper: never during list refresh. Older
+            # daemon objects without the helper fall back to the
+            # command text (test fakes only; the real daemon has it).
+            _render_fn = getattr(self.daemon, "render_insert_text", None)
+            if callable(_render_fn):
+                final = _render_fn(snippet)
+            else:
+                final = raw
+            self.pending_insert = (trigger, final)
+            self.hide()
+            self.accept()
+            return
         if snippet.get("type") == "variable":
             raw = snippet.get("value", "")
         else:
@@ -765,7 +860,13 @@ class QuickInsertDialog(QDialog):
             if values is None:
                 self.reject()
                 return
-        final = self.daemon.render_template(raw, prompt_values=values)
+        # Counter consumption and real random picks happen here, at
+        # insert time; previews use render_template directly.
+        _render_fn = getattr(self.daemon, "render_insert_text", None)
+        if callable(_render_fn):
+            final = _render_fn(snippet, prompt_values=values, raw=raw)
+        else:
+            final = self.daemon.render_template(raw, prompt_values=values)
         # Do NOT restore focus or schedule the insert here: restoring
         # before accept() is undone when the dialog closes, because Qt
         # (and the window manager, following the mouse) reactivates
@@ -1319,12 +1420,81 @@ class CategoryTagDialog(QDialog):
             self._after_change()
 
 
-class UsageStatsDialog(QDialog):
-    """Library usage statistics, from stored usage/last_used data only.
+def _usage_chart_series(log, days=30):
+    """[(day label, count), ...] for the last `days` days, oldest first."""
+    today = datetime.now().date()
+    series = []
+    for back in range(days - 1, -1, -1):
+        day = today - timedelta(days=back)
+        count = 0
+        if isinstance(log, dict):
+            day_counts = log.get(day.isoformat())
+            if isinstance(day_counts, dict):
+                count = sum(int(v or 0) for v in day_counts.values())
+        series.append((day.strftime("%b %d"), count))
+    return series
 
-    No per-day expansion log is stored, so "today" / "last 7 days"
-    count snippets whose last expansion fell in that window, not
-    individual expansions. Read-only: nothing here changes the library.
+
+class UsageChartWidget(QWidget):
+    """30-day bar chart of expansions, in the active theme's colors."""
+
+    def __init__(self, series, colors, parent=None):
+        super().__init__(parent)
+        self._series = list(series)
+        self._colors = colors
+        self.setMinimumHeight(110)
+
+    def sizeHint(self):
+        return QSize(400, 120)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        width = self.width()
+        height = self.height()
+        top = 20
+        bottom = height - 20
+        left = 8
+        right = width - 8
+        counts = [c for _label, c in self._series]
+        peak = max(counts) if counts else 0
+        font = painter.font()
+        font.setPointSize(8)
+        painter.setFont(font)
+        painter.setPen(QColor(self._colors["muted"]))
+        painter.drawText(left, 12, f"Peak: {peak}/day")
+        if not self._series or peak <= 0:
+            painter.drawText(left, top + 20, "No expansions recorded yet")
+            painter.end()
+            return
+        n = len(self._series)
+        plot_w = max(1, right - left)
+        slot = plot_w / n
+        bar_w = max(2.0, slot - 3.0)
+        plot_h = max(1, bottom - top)
+        for i, (label, count) in enumerate(self._series):
+            if count <= 0:
+                continue
+            bar_h = plot_h * count / peak
+            x = left + i * slot + (slot - bar_w) / 2
+            painter.fillRect(
+                int(x), int(bottom - bar_h), int(bar_w), int(bar_h),
+                QColor(self._colors["accent"]),
+            )
+        painter.setPen(QColor(self._colors["muted"]))
+        for i, (label, _count) in enumerate(self._series):
+            if i % 5 == 0 or i == n - 1:
+                x = left + i * slot
+                painter.drawText(int(x), height - 6, label)
+        painter.end()
+
+
+class UsageStatsDialog(QDialog):
+    """Library usage statistics, from stored usage/last_used data plus
+    the daily expansion log (usage_log.json). The "today" / "last 7
+    days" rows count snippets by last expansion; the "Expansions
+    today" / "last 30 days" rows count individual expansions from the
+    log. Read-only: nothing here changes the library.
     """
 
     def __init__(self, ui):
@@ -1335,12 +1505,22 @@ class UsageStatsDialog(QDialog):
         with daemon.snippets_lock:
             snippets = dict(daemon.snippets) if daemon is not None else {}
         self.stats_rows = self._compute_rows(snippets, daemon)
-        layout = QFormLayout(self)
+        layout = QVBoxLayout(self)
+        _saved = QSettings("Landaluce", "Textr").value("theme", "dark")
+        _colors = THEME_COLORS[resolved_theme(_saved)]
+        series = _usage_chart_series(getattr(daemon, "usage_log", None))
+        if sum(c for _l, c in series) > 0:
+            self.chart = UsageChartWidget(series, _colors)
+            layout.addWidget(self.chart)
+        else:
+            layout.addWidget(QLabel("No expansions recorded yet"))
+        form = QFormLayout()
         for label, value in self.stats_rows:
-            layout.addRow(label + ":", QLabel(str(value)))
+            form.addRow(label + ":", QLabel(str(value)))
+        layout.addLayout(form)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
-        layout.addRow(close_btn)
+        layout.addWidget(close_btn)
 
     @staticmethod
     def _compute_rows(snippets, daemon):
@@ -1377,6 +1557,12 @@ class UsageStatsDialog(QDialog):
                     last_backup = datetime.fromtimestamp(max(times)).strftime("%Y-%m-%d %H:%M")
             except Exception:
                 pass
+        # Daily log rows: individual expansions, not snippet counts.
+        # getattr-guarded: old fake daemons in tests have no usage_log.
+        log = getattr(daemon, "usage_log", None) if daemon is not None else None
+        series = _usage_chart_series(log)
+        expansions_today = series[-1][1] if series else 0
+        expansions_30d = sum(c for _label, c in series)
         return [
             ("Snippets", total),
             ("Enabled / disabled", f"{total - disabled} / {disabled}"),
@@ -1386,4 +1572,6 @@ class UsageStatsDialog(QDialog):
             ("Snippets used today", today),
             ("Snippets used in the last 7 days", week),
             ("Last snippets backup", last_backup),
+            ("Expansions today", expansions_today),
+            ("Expansions in the last 30 days", expansions_30d),
         ]
