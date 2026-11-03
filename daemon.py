@@ -428,6 +428,14 @@ class Daemon:
         except Exception as e:
             print("Failed to save config:", e)
 
+    @staticmethod
+    def _usage_count(snippet):
+        """Usage counter as an int, tolerating missing/corrupt values."""
+        try:
+            return int((snippet or {}).get("usage", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
     def load_snippets(self):
         if os.path.exists(self.snippets_file):
             try:
@@ -443,6 +451,24 @@ class Daemon:
                             snippet["tags"] = (
                                 [category] if category and category != "uncategorized" else []
                             )
+                        if isinstance(snippet, dict):
+                            existing = self.snippets.get(trigger)
+                            if isinstance(existing, dict):
+                                # Usage counters are runtime telemetry, not
+                                # file content: a reload must never roll
+                                # them back to the last-saved values. That
+                                # made :reload's own usage stick at 1 and
+                                # wiped every count recorded since the last
+                                # save. Keep the greater count and the
+                                # newer last-used stamp.
+                                if self._usage_count(existing) > self._usage_count(snippet):
+                                    snippet["usage"] = existing.get("usage", 0)
+                                    if existing.get("last_used"):
+                                        snippet["last_used"] = existing["last_used"]
+                                elif str(existing.get("last_used") or "") > str(
+                                    snippet.get("last_used") or ""
+                                ):
+                                    snippet["last_used"] = existing["last_used"]
                     self.snippets.update(loaded)
                 print(f"Loaded {len(loaded)} snippets from {self.snippets_file}")
             except Exception as e:
@@ -1202,8 +1228,14 @@ class Daemon:
         # Commands always work, even when paused (e.g. :resume, :quit).
         if item.get("type") == "command":
             expansion = self.is_valid_trigger(trigger)
+            # Commands count as used even when they produce no text: the
+            # trigger fired and its action ran. Previously only date/time
+            # commands were recorded (they return text); hide, ui, pause
+            # and the rest never reached _record_usage, so their Uses
+            # stayed 0 and they never appeared in Recent, most-used, or
+            # today/week statistics.
+            self._record_usage(trigger)
             if expansion is not None:
-                self._record_usage(trigger)
                 self.replace(trigger, expansion)
             else:
                 # Non-text commands (hide, ui, quit, ...) never reach
