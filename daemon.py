@@ -1205,6 +1205,14 @@ class Daemon:
             if expansion is not None:
                 self._record_usage(trigger)
                 self.replace(trigger, expansion)
+            else:
+                # Non-text commands (hide, ui, quit, ...) never reach
+                # replace(), which is what normally clears the buffer.
+                # Without this, the typed trigger stays in the buffer and
+                # glues onto the next one (":hide" + ":ui" = ":hide:ui"),
+                # whose word-boundary check then fails on the "e", so the
+                # next trigger never fires at all.
+                self.buffer = ""
             return True
 
         # Non-commands only expand when not paused.
