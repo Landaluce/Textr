@@ -85,6 +85,13 @@ class Daemon:
         # UI polls it so Uses / Last used / group counts / health update
         # live instead of only after a restart or a manual refresh.
         self._usage_stamp = 0
+        # Status notice for the UI poll (see _set_notice): a message the
+        # keyboard thread wants shown in the status bar, e.g. a typed
+        # template trigger with no variant for the current language.
+        # Same stamp pattern as _usage_stamp so poll_daemon_status can
+        # show it without any widget touched from the listener thread.
+        self._notice_stamp = 0
+        self._notice_message = ""
         # Keys that invalidate the typed buffer (cursor jumps, line edits...).
         # Normalized names shared by the pynput and evdev backends.
         self.buffer_reset_names = {
@@ -1344,6 +1351,15 @@ class Daemon:
         if item_type == "template":
             raw = item.get("languages", {}).get(self.current_language)
             if not raw:
+                # Silent failure today: the trigger expands nothing
+                # and nothing explains why. Stage the same message
+                # the tray insert path shows, for the UI poll to
+                # display. Still no expansion, no fallback to another
+                # language's variant, and no usage recorded (the
+                # caller only records when an expansion exists).
+                self._set_notice(
+                    f"No {self.current_language} template for '{trigger}'"
+                )
                 return None
             return self._render_snippet_text(item, raw)
 
@@ -1429,6 +1445,20 @@ class Daemon:
     def usage_stamp(self):
         """Monotonic counter, bumped on every recorded expansion."""
         return getattr(self, "_usage_stamp", 0)
+
+    def _set_notice(self, message):
+        """Stage a status-bar message for the UI poll to show."""
+        with self.snippets_lock:
+            self._notice_message = message
+            self._notice_stamp += 1
+
+    def notice_stamp(self):
+        """Monotonic counter, bumped on every staged status notice."""
+        return getattr(self, "_notice_stamp", 0)
+
+    def notice_message(self):
+        """Latest staged status notice (empty when none)."""
+        return getattr(self, "_notice_message", "")
 
     def _expand(self, trigger):
         """Resolve and expand `trigger` if it yields text; buffer is cleared."""
