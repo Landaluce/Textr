@@ -1769,7 +1769,9 @@ class TexterUI(QMainWindow):
         self.library_btn = QPushButton("Library")
         self.library_btn.setMenu(self.library_menu)
         primary_layout.addWidget(self.library_btn)
-        right_layout.addLayout(primary_layout)
+        # NOT added to right_layout: inside the scroll area the row
+        # scrolled out of view. It is pinned under the scroll area
+        # below, in the same bottom position.
 
         # Snippets and Settings panels share the window 50/50
         # (left_group already has stretch 1, so this matches it).
@@ -1780,7 +1782,15 @@ class TexterUI(QMainWindow):
         self.right_scroll.setWidgetResizable(True)
         self.right_scroll.setFrameShape(QFrame.NoFrame)
         self.right_scroll.setWidget(right_group)
-        main_layout.addWidget(self.right_scroll, 1)
+        # Right column: scrollable settings above, primary row pinned
+        # below so Quick Insert and Library stay visible at every
+        # window height. The column keeps the stretch the scroll area
+        # had, so the Snippets/Settings 50/50 split is unchanged.
+        right_column = QVBoxLayout()
+        right_column.setContentsMargins(0, 0, 0, 0)
+        right_column.addWidget(self.right_scroll, 1)
+        right_column.addLayout(primary_layout)
+        main_layout.addLayout(right_column, 1)
 
         # System Tray Icon Setup
         self.really_quit = False
