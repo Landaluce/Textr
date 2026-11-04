@@ -108,6 +108,7 @@ class TexterUI(QMainWindow):
         # Last usage stamp seen by the live-counts poll (None = not
         # initialised yet); see poll_daemon_status.
         self._last_usage_stamp = None
+        self._last_notice_stamp = None
         # Last search/filter result, for CSV export of visible rows.
         self._last_filtered_items = []
         self.quit_requested.connect(self.quit_app)
@@ -1065,6 +1066,29 @@ class TexterUI(QMainWindow):
                         self._last_usage_stamp = _stamp
                         self.refresh_snippet_list()
                         self.on_selection_changed()
+
+        # Status notices staged by the daemon (e.g. a typed template
+        # trigger with no variant for the current language): show the
+        # message for ~3 seconds, same wording and duration as the
+        # tray insert path. The stamp pattern keeps all widget access
+        # on the GUI thread; the daemon never touches the status bar.
+        # No modal deferral: a staged notice can only exist when the
+        # manager is not the focused window (typing suppresses
+        # triggers while it has focus), so no dialog can be open.
+        _notice_fn = getattr(self.daemon, "notice_stamp", None)
+        if callable(_notice_fn):
+            try:
+                _notice_stamp = _notice_fn()
+            except Exception:
+                _notice_stamp = None
+            if _notice_stamp is not None and getattr(
+                self, "_last_notice_stamp", None
+            ) != _notice_stamp:
+                self._last_notice_stamp = _notice_stamp
+                _msg_fn = getattr(self.daemon, "notice_message", None)
+                _msg = _msg_fn() if callable(_msg_fn) else ""
+                if _msg:
+                    self.statusBar().showMessage(_msg, 3000)
 
     def setup_ui(self):
         self.setWindowTitle("Texter - Snippet Manager")
