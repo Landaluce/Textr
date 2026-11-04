@@ -64,6 +64,7 @@ from dialogs import (
     CleanupDialog,
     CategoryTagDialog,
     UsageStatsDialog,
+    _place_at_cursor,
 )
 
 
@@ -109,6 +110,9 @@ class TexterUI(QMainWindow):
         # initialised yet); see poll_daemon_status.
         self._last_usage_stamp = None
         self._last_notice_stamp = None
+        self._cursor_toast = None
+        self._cursor_toast_timer = None
+        self._toast_duration_ms = 3000
         # Last search/filter result, for CSV export of visible rows.
         self._last_filtered_items = []
         self.quit_requested.connect(self.quit_app)
@@ -1089,6 +1093,54 @@ class TexterUI(QMainWindow):
                 _msg = _msg_fn() if callable(_msg_fn) else ""
                 if _msg:
                     self.statusBar().showMessage(_msg, 3000)
+                    self._show_cursor_toast(_msg)
+
+    def _show_cursor_toast(self, message):
+        """Transient label at the mouse cursor for a daemon notice.
+
+        The status-bar message alone is invisible while the user types
+        in another window with the manager hidden — exactly when a
+        missing-variant notice fires. The toast puts the same text
+        where the user is looking, using the prompt dialog's
+        cursor-placement helper (centered on the cursor, clamped
+        on-screen). It never takes focus (Qt.Tool plus
+        WA_ShowWithoutActivating, NoFocus), never touches the
+        document, and hides itself after _toast_duration_ms. A new
+        notice while one is showing replaces the text and restarts
+        the timer; there is only ever one toast.
+        """
+        toast = self._cursor_toast
+        if toast is None:
+            toast = QLabel(
+                "",
+                None,
+                Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint,
+            )
+            toast.setAttribute(Qt.WA_ShowWithoutActivating)
+            toast.setFocusPolicy(Qt.NoFocus)
+            self._cursor_toast = toast
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._hide_cursor_toast)
+            self._cursor_toast_timer = timer
+        colors = THEME_COLORS.get(
+            getattr(self, "_resolved_theme", "dark"), THEME_COLORS["dark"]
+        )
+        toast.setStyleSheet(
+            "QLabel { background-color: %s; color: %s; "
+            "border: 1px solid %s; border-radius: 6px; "
+            "padding: 6px 10px; }"
+            % (colors["tree_bg"], colors["text"], colors["accent"])
+        )
+        toast.setText(message)
+        _place_at_cursor(toast)
+        toast.show()
+        self._cursor_toast_timer.start(self._toast_duration_ms)
+
+    def _hide_cursor_toast(self):
+        toast = self._cursor_toast
+        if toast is not None:
+            toast.hide()
 
     def setup_ui(self):
         self.setWindowTitle("Texter - Snippet Manager")
