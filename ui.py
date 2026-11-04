@@ -840,17 +840,50 @@ class TexterUI(QMainWindow):
         if not self.daemon:
             return
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Import Pack", "", "JSON Files (*.json)"
+            self, "Import Pack", "", "Pack Files (*.json *.zip)"
         )
         if not file_path:
             return
         try:
-            with open(file_path, "r") as f:
-                raw = json.load(f)
+            if file_path.lower().endswith(".zip"):
+                # Packs are delivered as zips (pack JSON + reference
+                # sheet): read the single .json member in place.
+                import zipfile
+
+                with zipfile.ZipFile(file_path) as zf:
+                    json_names = [
+                        n for n in zf.namelist()
+                        if n.lower().endswith(".json")
+                    ]
+                    if not json_names:
+                        raise ValueError("no .json file found in the zip")
+                    raw = json.loads(zf.read(json_names[0]).decode("utf-8"))
+            else:
+                with open(file_path, "r") as f:
+                    raw = json.load(f)
+
+            def _list_to_dict(items):
+                # Legacy list shape ([{"trigger": ..., ...}]) the
+                # snippet packs ship in: the "trigger" key becomes
+                # the dict key and is stripped from the snippet,
+                # exactly like Import JSON normalizes it. Entries
+                # without a trigger are skipped, not imported.
+                return {
+                    item["trigger"]: {
+                        k: v for k, v in item.items() if k != "trigger"
+                    }
+                    for item in items
+                    if isinstance(item, dict) and item.get("trigger")
+                }
+
             if isinstance(raw, dict) and isinstance(raw.get("snippets"), dict):
                 snippets = raw["snippets"]
+            elif isinstance(raw, dict) and isinstance(raw.get("snippets"), list):
+                snippets = _list_to_dict(raw["snippets"])
             elif isinstance(raw, dict):
                 snippets = raw
+            elif isinstance(raw, list):
+                snippets = _list_to_dict(raw)
             else:
                 raise ValueError("file is neither a pack nor a snippet dict")
             if not snippets:
