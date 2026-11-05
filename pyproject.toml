@@ -22,7 +22,20 @@ textr = "main:main"
 textr-diag = "diag:main"
 
 [tool.setuptools]
-py-modules = ["daemon", "ui", "main", "stylesheet", "keys", "input_wayland", "diag"]
+py-modules = [
+    "app_icon",
+    "daemon",
+    "diag",
+    "dialogs",
+    "input_wayland",
+    "keys",
+    "main",
+    "shortcut",
+    "snippet_helpers",
+    "stylesheet",
+    "ui",
+    "widgets",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

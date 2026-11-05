@@ -5,7 +5,8 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox, QFileDialog
 
@@ -38,6 +39,21 @@ def top_level_groups(tree):
     return out
 
 
+def stylesheet_selectors_setting(stylesheet, prop):
+    """Selectors of every rule block that sets `prop`, in source order."""
+    selectors = []
+    lines = stylesheet.splitlines()
+    for index, line in enumerate(lines):
+        if prop not in line:
+            continue
+        # Walk back to the line that opened this block.
+        for back in range(index, -1, -1):
+            if lines[back].strip().endswith("{"):
+                selectors.append(lines[back].strip().rstrip("{").strip())
+                break
+    return selectors
+
+
 def find_snippet_item(tree, trigger):
     """The tree item for a given snippet trigger, or None."""
     def walk(item):
@@ -57,14 +73,30 @@ def find_snippet_item(tree, trigger):
 
 
 @pytest.fixture(scope="session")
-def qapp():
+def qapp(tmp_path_factory):
     app = QApplication.instance() or QApplication([])
+    # The window keeps its own preferences (view mode, grouping, sort, theme,
+    # geometry) in QSettings("Landaluce", "Textr"). Left at the default path
+    # these tests would read - and overwrite - the real desktop settings of
+    # whoever runs them, and one test's saved state would leak into the next.
+    # Redirect the store to a throwaway directory before any window is built.
+    # This has to happen after QApplication exists (otherwise the path is
+    # re-resolved) and for NativeFormat too, which is what the window uses.
+    settings_dir = str(tmp_path_factory.mktemp("settings"))
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    for fmt in (QSettings.IniFormat, QSettings.NativeFormat):
+        QSettings.setPath(fmt, QSettings.UserScope, settings_dir)
     yield app
 
 
 @pytest.fixture
 def window(qapp, d):
+    # Start from the state of a fresh install, so a test that closes its
+    # window (persisting geometry/grouping/sort) cannot affect the next one.
+    QSettings("Landaluce", "Textr").clear()
     w = TexterUI(daemon=d)
+    # The manager opens in Table view; these tests exercise the Tree view.
+    w.view_combo.setCurrentIndex(w.view_combo.findData("tree"))
     yield w
     w.status_timer.stop()
     w.tray_icon.hide()
@@ -295,10 +327,12 @@ class TestDialogTags:
 
 
 class TestReadability:
-    def test_group_headers_bold_lavender(self, window):
+    def test_group_headers_bold_in_accent_color(self, window):
+        # Group headers are bold and painted in the briefing orange that
+        # SnippetTreeWidget._ensure_group sets, not the old lavender.
         group = window.snippet_list.topLevelItem(0)
         assert group.font(0).bold()
-        assert group.foreground(0).color().name() == "#cba6f7"
+        assert group.foreground(0).color().name() == "#ff9a3c"
 
     def test_variable_snippet_uses_light_green(self, window):
         sig_item = find_snippet_item(window.snippet_list, "sig")
@@ -351,7 +385,10 @@ class TestSelectionPreserved:
 
         selected = [i.data(0, Qt.UserRole) for i in window.snippet_list.selectedItems()]
         assert selected == ["sig"]
-        assert "Trigger: sig" in window.preview_text.toPlainText()
+        # The preview shows the trigger in its own detail label now, and the
+        # expansion in preview_text.
+        assert window.preview_detail_labels["trigger"].text() == "sig"
+        assert window.preview_text.toPlainText().strip()
 
     def test_selection_survives_search_refresh(self, window):
         sig_item = find_snippet_item(window.snippet_list, "sig")
@@ -403,10 +440,19 @@ class TestHighlightClipping:
             if line.strip().startswith("QTreeWidget::item") and line.strip().endswith("{")
         ]
         assert rules == []
-        # selection colors on the tree would map to the palette highlight the
-        # view paints full-row below the delegate. (Property form with ':' so
-        # comments mentioning it don't count.)
-        assert dark_stylesheet.count("selection-background-color:") == 1
+        # A selection color on the tree would map to the palette highlight the
+        # view paints full-row below the delegate. Other widgets (line edits,
+        # tables) are free to set their own, so check the selectors rather
+        # than counting occurrences. (Property form with ':' so comments
+        # mentioning it don't count.)
+        tree_selectors = [
+            selector
+            for selector in stylesheet_selectors_setting(
+                dark_stylesheet, "selection-background-color:"
+            )
+            if "QTreeWidget" in selector
+        ]
+        assert tree_selectors == []
 
 
 def _activate(window):
@@ -480,13 +526,29 @@ class TestSnippetShortcuts:
 
 
 class TestQuitPaths:
-    def test_close_button_and_quit_button_share_single_path(self, window, monkeypatch):
+    def test_close_button_routes_through_quit_app(self, window, monkeypatch):
         calls = []
         monkeypatch.setattr(window, "quit_app", lambda: calls.append("quit_app"))
         window.close()  # the X button -> closeEvent
-        window.quit_button()
-        # No extra daemon.stop() in quit_button - both go through quit_app only.
-        assert calls == ["quit_app", "quit_app"]
+        assert calls == ["quit_app"]
+
+    def test_tray_quit_uses_the_same_path(self, window, d, monkeypatch):
+        # The Quit button was removed on purpose (see the button-row comment
+        # in TexterUI): the X and the tray menu's Quit are the two paths, and
+        # both must end in quit_app().
+        assert not hasattr(window, "quit_button")
+        stops, saved = [], []
+        monkeypatch.setattr(d, "stop", lambda: stops.append("stop"))
+        monkeypatch.setattr(d, "save_snippets", lambda: saved.append("save"))
+        quit_actions = [
+            action for action in window.tray_icon.contextMenu().actions()
+            if action.text() == "Quit"
+        ]
+        assert len(quit_actions) == 1
+        quit_actions[0].trigger()
+        assert stops == ["stop"]
+        assert saved == ["save"]
+        assert window.really_quit is True
 
     def test_close_event_stops_daemon_and_saves_snippets(self, window, d, monkeypatch):
         stops = []
@@ -627,7 +689,10 @@ class TestDisabledSnippetDisplay:
         window.refresh_snippet_list()
         item = find_snippet_item(window.snippet_list, "dim")
         assert item is not None
-        assert item.foreground(0).color().name() == "#6c7086"
+        # Disabled rows use the muted disabled color for the active theme
+        # (TexterUI.DISABLED_COLOR), compared through QColor so a palette tweak
+        # doesn't break this again.
+        assert item.foreground(0).color().name() == QColor(window.DISABLED_COLOR).name()
 
     def test_enabled_snippet_keeps_type_color(self, window, d):
         window.refresh_snippet_list()
@@ -639,7 +704,8 @@ class TestDisabledSnippetDisplay:
         window.refresh_snippet_list()
         item = find_snippet_item(window.snippet_list, "dim")
         window.snippet_list.setCurrentItem(item)
-        assert "DISABLED" in window.preview_text.toPlainText()
+        # The disabled note lives on the usage line under the preview.
+        assert "DISABLED" in window.preview_used_label.text()
 
 
 class TestTriggerConflicts:
@@ -696,7 +762,8 @@ class TestEditSnippet:
     def test_selection_shows_preview(self, window):
         sig_item = find_snippet_item(window.snippet_list, "sig")
         window.snippet_list.setCurrentItem(sig_item)
-        assert "Trigger: sig" in window.preview_text.toPlainText()
+        assert window.preview_detail_labels["trigger"].text() == "sig"
+        assert window.preview_detail_labels["type"].text() == "variable"
 
     def test_edit_with_no_selection_is_noop(self, window, d):
         window.snippet_list.clearSelection()
@@ -757,7 +824,7 @@ class TestTreeContextMenu:
     def test_context_menu_has_expected_actions(self, window, d):
         menu = window.snippet_list._build_context_menu(window, "sig")
         texts = [a.text() for a in menu.actions() if a.text()]
-        assert texts == ["Edit", "Duplicate", "Disable", "Delete"]
+        assert texts == ["Edit", "Duplicate", "Favourite", "Disable", "Delete"]
 
     def test_context_menu_actions_route_to_handlers(self, window, d, monkeypatch):
         called = []
@@ -778,7 +845,7 @@ class TestTreeContextMenu:
         d.snippets["sig"]["enabled"] = False
         menu = window.snippet_list._build_context_menu(window, "sig")
         texts = [a.text() for a in menu.actions() if a.text()]
-        assert texts == ["Edit", "Duplicate", "Enable", "Delete"]
+        assert texts == ["Edit", "Duplicate", "Favourite", "Enable", "Delete"]
 
     def test_context_menu_ignored_on_group_header(self, window, d, monkeypatch):
         # A group header (UserRole+1 name, no UserRole trigger) gets no menu:
