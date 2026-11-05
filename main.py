@@ -4,6 +4,7 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 from app_icon import apply_app_icon
 from daemon import Daemon
+from shortcut import install_app_shortcut
 from ui import TexterUI
 from stylesheet import STYLESHEETS, resolved_theme
 
@@ -15,6 +16,13 @@ def main():
     # The embedded logo is applied to the application and to the main
     # window so the dock, taskbar and Alt-Tab show the Textr mark.
     apply_app_icon(app)
+
+    # Linux only, best-effort, never blocks startup: install the
+    # app-menu shortcut (textr.desktop + logo) so Textr appears in
+    # Activities with its logo and can be pinned to the dock. A raw
+    # Linux binary cannot carry a file icon, so this is the launcher
+    # that carries it instead.
+    install_app_shortcut()
     
     # Saved theme (Dark by default); the manager's Theme combo in
     # Preferences changes it live and persists it here.
