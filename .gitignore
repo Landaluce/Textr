@@ -14,6 +14,10 @@ my_logs.log
 nohup.out
 somefile
 
+# Machine-local launcher (binds a desktop shortcut and a checkout venv;
+# use run.sh or the installed `textr` entry point instead)
+launch.sh
+
 # Packaging artifacts
 build/
 dist/
