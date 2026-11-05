@@ -5,6 +5,9 @@ __pycache__/
 # Runtime user data (contains personal info)
 config.json
 snippets.json
+usage_log.json
+trash.json
+backups/
 
 # Logs and scratch files
 my_logs.log
