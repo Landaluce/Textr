@@ -10,6 +10,7 @@ import math
 import shutil
 import string
 import subprocess
+import sys
 import threading
 import traceback
 from pynput import keyboard
@@ -107,19 +108,40 @@ class Daemon:
         self.load_config()
         self.prune_expired_trash()
 
+    def _program_dir(self):
+        """Directory of the running program when it is a source checkout.
+
+        Running the checkout as `python main.py` sets __main__.__file__ to
+        that main.py, so its legacy data files can be found without trusting
+        the working directory: a desktop launcher or autostart entry starts
+        in $HOME when it has no (or a stale cached) Path key, which used to
+        make Textr read a second snippets.json under ~/.config. Packaged and
+        installed entry points have no such layout and return None.
+        """
+        main_file = getattr(sys.modules.get("__main__"), "__file__", None)
+        if main_file and os.path.basename(main_file) == "main.py":
+            return os.path.dirname(os.path.abspath(main_file))
+        return None
+
     def _resolve_path(self, filename):
         """Locate a data file, preferring XDG config with a legacy fallback.
 
         Precedence: absolute paths and the TEXTR_CONFIG_DIR override (used by
-        tests) win; otherwise a file already present next to the working
-        directory (legacy source-tree layout) is used as-is; otherwise the
-        file lives under $XDG_CONFIG_HOME/textr (created on demand).
+        tests) win; then a file already present next to the program itself
+        (the checkout being run as main.py); then a file next to the working
+        directory (legacy source-tree layout); otherwise the file lives under
+        $XDG_CONFIG_HOME/textr (created on demand).
         """
         if os.path.isabs(filename):
             return filename
         override = os.environ.get("TEXTR_CONFIG_DIR")
         if override:
             return os.path.join(override, filename)
+        program_dir = self._program_dir()
+        if program_dir:
+            candidate = os.path.join(program_dir, filename)
+            if os.path.exists(candidate):
+                return candidate
         if os.path.exists(filename):
             return filename
         xdg_config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(

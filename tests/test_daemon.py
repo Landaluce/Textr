@@ -447,6 +447,33 @@ class TestDataPaths:
         (tmp_path / "y.json").write_text("{}")
         assert daemon._resolve_path("y.json") == "y.json"  # legacy file wins
 
+    def test_program_dir_wins_over_working_directory(self, monkeypatch, tmp_path):
+        """A launcher that starts in $HOME must still find the checkout's data."""
+        monkeypatch.delenv("TEXTR_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        monkeypatch.setattr(daemon_mod.keyboard, "Controller", FakeController)
+        monkeypatch.setattr(daemon_mod, "pyperclip", FakeClipboard())
+        monkeypatch.setattr(daemon_mod.time, "sleep", lambda seconds: None)
+
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        (checkout / "main.py").write_text("")
+        (checkout / "snippets.json").write_text(json.dumps({}))
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.chdir(home)
+        monkeypatch.setattr(
+            daemon_mod.sys.modules["__main__"],
+            "__file__",
+            str(checkout / "main.py"),
+            raising=False,
+        )
+
+        daemon = daemon_mod.Daemon(snippets_file="snippets.json")
+
+        assert daemon.snippets_file == str(checkout / "snippets.json")
+        assert daemon.backup_dir == str(checkout / "backups")
+
 
 class TestLayoutConfig:
     def test_config_defaults_to_us_layout(self, d):
