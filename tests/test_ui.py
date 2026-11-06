@@ -11,6 +11,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox, QFileDialog
 
 from ui import AddSnippetDialog, TexterUI
+from dialogs import CategoriesDialog
 
 
 def collect_triggers(tree):
@@ -911,3 +912,53 @@ class TestStateSync:
         assert d.enabled is True
         type_text(" sig")
         assert len(d.controller.backspaces()) - before == len("sig")
+
+
+class TestCategoryOverview:
+    """The read-only "All categories" list (Library -> Categories...)."""
+
+    def _texts(self, dialog):
+        return {
+            dialog.category_list.item(i).data(Qt.UserRole):
+                dialog.category_list.item(i).text()
+            for i in range(dialog.category_list.count())
+        }
+
+    def test_lists_every_category_with_counts(self, window, d):
+        d.add_or_update_snippet(
+            "web1", {"type": "variable", "value": "v", "category": "python/web"}
+        )
+        d.add_or_update_snippet(
+            "misc1", {"type": "variable", "value": "v", "category": "misc"}
+        )
+        window.refresh_snippet_list()
+        dialog = CategoriesDialog(window)
+        texts = self._texts(dialog)
+        # Nested categories keep their full path, as in the filter drop-down.
+        assert set(texts) == {"test", "python/web", "misc"}
+        assert texts["misc"] == "misc  \u2022  1 snippet(s)"
+        assert texts["test"] == "test  \u2022  3 snippet(s)"
+        assert dialog.summary_label.text() == "3 categories, 5 snippet(s)"
+
+    def test_summary_is_singular_for_one_category(self, window):
+        dialog = CategoriesDialog(window)
+        assert dialog.summary_label.text() == "1 category, 3 snippet(s)"
+
+    def test_show_in_manager_filters_the_snippet_list(self, window, d):
+        d.add_or_update_snippet(
+            "misc1", {"type": "variable", "value": "v", "category": "misc"}
+        )
+        window.refresh_snippet_list()
+        dialog = CategoriesDialog(window)
+        rows = [
+            dialog.category_list.item(i).data(Qt.UserRole)
+            for i in range(dialog.category_list.count())
+        ]
+        dialog.category_list.setCurrentRow(rows.index("misc"))
+        dialog._filter_selected()
+        assert window.category_combo.currentText() == "misc"
+        assert collect_triggers(window.snippet_list) == ["misc1"]
+
+    def test_library_menu_opens_the_category_list(self, window):
+        labels = [action.text() for action in window.library_menu.actions()]
+        assert "Categories\u2026" in labels
