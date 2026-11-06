@@ -37,7 +37,7 @@ description: "AI agent instructions for the Texter MVP project - a Python-based 
 - **Prefix disambiguation**: when a trigger is the prefix of another (`:d` vs `:dt`), `_handle_key` defers expansion via `pending_trigger` until the next key disambiguates (longer trigger, boundary key/char fires the short one, or abort); disabled snippets (`"enabled": false`) are excluded from matching AND deferral via `_enabled()`
 - **Date/time formats**: `get_context()` and the `:d`/`:time`/`:datetime` command expander honor `config["date_format"]` / `config["time_format"]` (strftime strings, defaults `%Y-%m-%d` / `%H:%M`)
 - **Snippet grouping/tags/usage**: snippets carry an optional `tags` list (legacy `category` is normalized into `tags` on load); the daemon records `usage`/`last_used` on every expansion (`_record_usage`) for the UI's recently/most-used sorting
-- **Data paths**: `_resolve_path()` prefers `$TEXTR_CONFIG_DIR`, then a legacy CWD file, then `$XDG_CONFIG_HOME/textr/`
+- **Data paths**: `_resolve_path()` prefers `$TEXTR_CONFIG_DIR`, then a legacy file next to the running `main.py` (a checkout, whatever the working directory), then a legacy CWD file, then `$XDG_CONFIG_HOME/textr/`
 
 ### ui.py
 - **Responsibility**: QApplication GUI with system tray icon

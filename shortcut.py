@@ -71,18 +71,43 @@ def _launch_command():
     return shlex.quote(found) if found else "textr"
 
 
-def _desktop_contents(exec_command):
-    return (
-        "[Desktop Entry]\n"
-        "Type=Application\n"
-        "Name=Textr\n"
-        "Comment=Text expansion with an actual GUI\n"
-        f"Exec={exec_command}\n"
-        f"Icon={ICON_THEME_NAME}\n"
-        "Terminal=false\n"
-        "Categories=Utility;\n"
-        "Keywords=text expansion;snippets;\n"
-    )
+def _launch_working_dir():
+    """Directory the launcher must start in to read the same data files.
+
+    Textr resolves config.json/snippets.json relative to the working
+    directory and only then falls back to ~/.config/textr, while a .desktop
+    launcher starts in $HOME unless it sets Path. For a source-tree run,
+    point Path at the checkout that holds main.py so a menu launch uses the
+    same snippets as launching from the source tree. Packaged builds keep
+    their data in the per-OS location, so no Path is written for them.
+    """
+    if getattr(sys, "frozen", False):
+        return None
+    argv0 = sys.argv[0] if sys.argv else ""
+    if argv0.endswith(".py"):
+        return os.path.dirname(os.path.abspath(argv0))
+    return None
+
+
+def _desktop_contents(exec_command, working_dir=None):
+    lines = [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=Textr",
+        "Comment=Text expansion with an actual GUI",
+        f"Exec={exec_command}",
+    ]
+    if working_dir:
+        # Without this the entry runs in $HOME and resolves its data files to
+        # ~/.config/textr instead of the checkout's snippets.json.
+        lines.append(f"Path={working_dir}")
+    lines += [
+        f"Icon={ICON_THEME_NAME}",
+        "Terminal=false",
+        "Categories=Utility;",
+        "Keywords=text expansion;snippets;",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _write_if_changed(path, data, mode="w"):
@@ -146,7 +171,8 @@ def install_app_shortcut():
         desktop_path = _desktop_path()
         os.makedirs(os.path.dirname(desktop_path), exist_ok=True)
         _write_if_changed(
-            desktop_path, _desktop_contents(_launch_command())
+            desktop_path,
+            _desktop_contents(_launch_command(), _launch_working_dir()),
         )
         _install_icon()
         _refresh_caches()

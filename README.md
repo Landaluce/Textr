@@ -169,8 +169,9 @@ The Library menu's **Usage statistics** dialog shows totals from the stored `usa
 Data files are looked up in this order:
 
 1. `$TEXTR_CONFIG_DIR` (used by tests; unset normally)
-2. a file already present next to the working directory (legacy source-tree layout)
-3. the per-OS app data directory, created on demand:
+2. a file already present next to `main.py` when the checkout is run directly, so a desktop-launcher or autostart start reads the same data as one from a terminal
+3. a file already present next to the working directory (legacy source-tree layout)
+4. the per-OS app data directory, created on demand:
    - Linux: `$XDG_CONFIG_HOME/textr/` (defaults to `~/.config/textr/`)
    - Windows: `%APPDATA%/Textr/`
    - macOS: `~/Library/Application Support/Textr/`

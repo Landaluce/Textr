@@ -2032,6 +2032,21 @@ class TexterUI(QMainWindow):
         found = shutil.which("textr")
         return found or "textr"
 
+    def _autostart_working_dir(self):
+        """Directory the autostart entry must start in, or None.
+
+        Textr resolves config.json/snippets.json relative to the working
+        directory and only then falls back to ~/.config/textr, while an XDG
+        autostart entry runs in $HOME. Pointing Path at the checkout keeps a
+        login launch on the same snippets as a launch from the source tree.
+        """
+        if getattr(sys, "frozen", False):
+            return None
+        argv0 = sys.argv[0] if sys.argv else ""
+        if argv0.endswith(".py"):
+            return os.path.dirname(os.path.abspath(argv0))
+        return None
+
     def _autostart_enabled(self):
         return os.path.exists(self._autostart_file())
 
@@ -2041,15 +2056,21 @@ class TexterUI(QMainWindow):
         try:
             if enabled:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
+                lines = [
+                    "[Desktop Entry]",
+                    "Type=Application",
+                    "Name=Textr",
+                    f"Exec={self._autostart_exec()}",
+                ]
+                working_dir = self._autostart_working_dir()
+                if working_dir:
+                    lines.append(f"Path={working_dir}")
+                lines += [
+                    "X-GNOME-Autostart-enabled=true",
+                    "NoDisplay=false",
+                ]
                 with open(path, "w") as f:
-                    f.write(
-                        "[Desktop Entry]\n"
-                        "Type=Application\n"
-                        "Name=Textr\n"
-                        f"Exec={self._autostart_exec()}\n"
-                        "X-GNOME-Autostart-enabled=true\n"
-                        "NoDisplay=false\n"
-                    )
+                    f.write("\n".join(lines) + "\n")
             elif os.path.exists(path):
                 os.remove(path)
             return True
