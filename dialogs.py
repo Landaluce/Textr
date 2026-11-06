@@ -1420,6 +1420,71 @@ class CategoryTagDialog(QDialog):
             self._after_change()
 
 
+class CategoriesDialog(QDialog):
+    """Every category in the library, with its snippet count.
+
+    The manager's Category drop-down shows the same names one at a time,
+    and "Manage categories & tags" exists to rename and delete them. This
+    is the browse view instead: the whole list at once, plus one button to
+    filter the snippet list to the category you pick.
+    """
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.window = window
+        self.setWindowTitle("All categories")
+        self.setMinimumWidth(380)
+        layout = QVBoxLayout(self)
+
+        self.summary_label = QLabel("")
+        layout.addWidget(self.summary_label)
+
+        self.category_list = QListWidget()
+        self.category_list.setToolTip(
+            "Double-click a category to filter the snippet list"
+        )
+        self.category_list.itemDoubleClicked.connect(self._filter_selected)
+        layout.addWidget(self.category_list)
+
+        btn_row = QHBoxLayout()
+        self.filter_btn = QPushButton("Show in manager")
+        self.filter_btn.setToolTip(
+            "Filter the snippet list to the selected category"
+        )
+        self.filter_btn.clicked.connect(self._filter_selected)
+        btn_row.addWidget(self.filter_btn)
+        btn_row.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        self.refresh()
+
+    def refresh(self):
+        """Rebuild the list from the library's current contents."""
+        self.category_list.clear()
+        rows = self.window.category_counts()
+        for category, count in rows:
+            item = QListWidgetItem(f"{category}  \u2022  {count} snippet(s)")
+            item.setData(Qt.UserRole, category)
+            self.category_list.addItem(item)
+        total = sum(count for _category, count in rows)
+        noun = "category" if len(rows) == 1 else "categories"
+        self.summary_label.setText(f"{len(rows)} {noun}, {total} snippet(s)")
+        self.filter_btn.setEnabled(bool(rows))
+        if rows:
+            self.category_list.setCurrentRow(0)
+
+    def _filter_selected(self, *_args):
+        """Apply the selected category to the manager's list."""
+        item = self.category_list.currentItem()
+        if item is None:
+            return
+        self.window.set_category_filter(item.data(Qt.UserRole))
+        self.accept()
+
+
 def _usage_chart_series(log, days=30):
     """[(day label, count), ...] for the last `days` days, oldest first."""
     today = datetime.now().date()

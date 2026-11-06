@@ -62,6 +62,7 @@ from dialogs import (
     PackExportDialog,
     PackConflictDialog,
     CleanupDialog,
+    CategoriesDialog,
     CategoryTagDialog,
     UsageStatsDialog,
     _place_at_cursor,
@@ -1795,6 +1796,7 @@ class TexterUI(QMainWindow):
         self.library_menu.addAction("Backup now", self.backup_now)
         self.library_menu.addAction("Export visible to CSV", self.export_visible_csv)
         self.library_menu.addAction("Usage statistics", self.show_usage_stats)
+        self.library_menu.addAction("Categories\u2026", self.show_categories)
         self.library_menu.addSeparator()
         self.library_menu.addAction(
             "New snippet from clipboard", self.new_snippet_from_clipboard
@@ -3090,6 +3092,20 @@ class TexterUI(QMainWindow):
         dialog = CategoryTagDialog(self)
         dialog.exec()
         self.refresh_snippet_list()
+
+    def show_categories(self):
+        """Open the read-only list of every category (browse, not edit)."""
+        if not self.daemon:
+            return
+        dialog = CategoriesDialog(self)
+        dialog.exec()
+
+    def set_category_filter(self, category):
+        """Filter the snippet list to `category` (used by the overview)."""
+        index = self.category_combo.findText(category)
+        if index < 0:
+            return
+        self.category_combo.setCurrentIndex(index)
 
     def selected_trigger(self):
         """Trigger of the selected snippet in whichever view is active."""
