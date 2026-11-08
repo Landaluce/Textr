@@ -53,7 +53,7 @@ evdev>=1.6; sys_platform == 'linux'
 | Windows | `Textr.exe` | Double-click (see Windows notes below) |
 | macOS | `Textr-macos.zip` | Unzip, drag `Textr.app` to Applications (see macOS notes below) |
 
-**Want the easy path?** The [$15 ready-to-run bundle](https://alvaroluce.gumroad.com/l/textr) includes all three binaries plus the snippet starter pack — no GitHub, no setup fiddling.
+**Skip the setup:** the [$15 ready-to-run bundle](https://alvaroluce.gumroad.com/l/textr) is one purchase — all three binaries plus the snippet starter pack, download in a minute, no GitHub and no setup fiddling.
 
 Or run from source:
 
