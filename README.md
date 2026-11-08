@@ -2,6 +2,8 @@
 
 Text expansion for Linux, Windows, and macOS. Type a short trigger anywhere and Textr expands it into full text, code templates, or actions — with a PySide6 GUI for managing snippets and settings.
 
+![Textr demo: typing :py expands a trigger into a function template](assets/demo.gif)
+
 ## Features
 
 - **Global trigger detection** — works in any application via a background keyboard daemon
