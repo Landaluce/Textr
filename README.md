@@ -83,6 +83,26 @@ Two first-launch steps:
 - **Typing output** goes through `ydotool` (the daemon must be running). Install it from [https://github.com/ReimuNotMoe/ydotool](https://github.com/ReimuNotMoe/ydotool).
 - **Keyboard layout** — evdev reports keycodes, not characters, so the captured keys must be mapped through your keyboard layout. Set it to `us`, `uk`, `de`, `fr`, or `es` in Settings (stored as `"layout"` in `config.json`; defaults to `us`). AltGr characters (e.g. `@` on a German layout) are supported. Layout tables are best-effort approximations of the common variants — extend `LAYOUTS` in `input_wayland.py` to add more.
 
+## FAQ
+
+**It's MIT but the binaries cost $15 — which is it?**
+Both, deliberately. The source in this repo is MIT: `pip install .` (or `bash run.sh`) builds the same app for free, and nothing in it is gated — no license check, no telemetry, no seat limit, no "pro" tier. The [$15 bundle](https://alvaroluce.gumroad.com/l/textr) is the prebuilt binaries for all three platforms plus a snippet starter pack, and it is what funds the project. If the paid version ever stopped being worth it, the source stays free.
+
+**Does the Espanso import handle variables and forms?**
+No. Espanso `{{...}}` variables — `{{date}}`, `{{form}}`, scripts — are imported as literal text: the importer parses a YAML subset into plain variable snippets and evaluates nothing. Entries without a `trigger` or a `replace` are skipped, and triggers you already have are skipped rather than overwritten. Plain, single/double-quoted, `|` and `>` block scalars are supported. See [Importing from Espanso](#importing-from-espanso).
+
+**Why does Wayland need my user in the `input` group?**
+Because there is no supported way for an ordinary application to read global keystrokes under Wayland — that absence is the security model, since the capability is a keylogger's. Textr reads `/dev/input/event*` directly, which needs read access to those devices (`input` group, or root). Treat it as the privileged capability it is: if you don't want to grant it, stay on X11 or use the tray and quick-insert picker instead of global triggers. The daemon has no network code: typed text never leaves the machine. See [Wayland notes](#wayland-notes-linux).
+
+**Why do macOS and Windows warn about the app?**
+The builds are unsigned and the macOS app is not notarized — both require a paid developer certificate. macOS: right-click `Textr.app` → **Open**, or allow it under **Privacy & Security**. Windows: SmartScreen → **More info → Run anyway**. Building from source produces no warning.
+
+**Which keyboard layouts work?**
+`us`, `uk`, `de`, `fr` and `es`, including AltGr characters. Run `python3 -m diag --listen 5` to print the live keycode → character mapping for your keyboard; add a table to `LAYOUTS` in `input_wayland.py` for anything else. Dead keys and IME composition are not handled.
+
+**Does it work in every application?**
+Mostly. Terminals often need a different paste shortcut in clipboard mode (**Settings → Paste shortcut**), and applications that ignore synthetic input (some Electron windows, password fields) can refuse. **Human Typing** types character by character and gets further in those cases.
+
 ## Usage
 
 ```bash
