@@ -260,6 +260,45 @@ REC_COLD = "\n".join([
     '— on the Platform team, building the ingestion layer. The range is',
     '95-115k. Open to a quick 15-minute chat this week?',
 ])
+# --- demo-data privacy guard -------------------------------------------------
+# Everything these scenarios show is invented, so none of it may carry a real
+# person's details. The owner's surname once leaked into a mail signature, so any
+# scenario, snippet, header or window title containing one of these tokens
+# (case-insensitive) refuses to render instead of shipping the GIF.
+PERSONAL_IDENTIFIERS = ("landaluce", "alvaro")
+
+
+def _iter_text(value):
+    """Yield every string inside a scenario's nested dicts, lists and tuples."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_text(item)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _iter_text(item)
+
+
+def check_personal_data(name, payload):
+    """Abort the render if demo data contains a real identifier."""
+    hits = []
+    for text in _iter_text(payload):
+        lowered = text.lower()
+        for token in PERSONAL_IDENTIFIERS:
+            if token in lowered:
+                hits.append((token, text))
+                break
+    if hits:
+        report = "\n".join(
+            "  - " + token + " in: " + text.replace("\n", " / ")[:90]
+            for token, text in hits
+        )
+        sys.exit(
+            "refusing to render '" + name + "': demo data contains a real personal "
+            "detail. Use an invented placeholder instead:\n" + report
+        )
+
 
 PACK_SCENARIOS = {
     "python": {
@@ -1294,6 +1333,8 @@ def render_gif(name, output, args):
                 "title": "draft.py", "syntax": True, "steps": None}
     else:
         meta = PACK_SCENARIOS[name]
+    check_personal_data(name, [meta, DEMO_CONFIG])
+
     snippets, start_lines = meta["snippets"], meta["start"]
     title, syntax, steps = meta["title"], meta["syntax"], meta["steps"]
 
