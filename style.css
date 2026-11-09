@@ -1,30 +1,40 @@
+/* Palette mirrors Textr's own stylesheet.py (Catppuccin Mocha):
+   base #1e1e2e, mantle #181825, surface0 #313244, surface1 #45475a,
+   text #cdd6f4, subtext0 #a6adc8, lavender #b4befe, blue #89b4fa. */
+
 :root {
-  --bg: #1e1e2e;
-  --bg-deep: #181825;
-  --panel: #252537;
-  --border: #3b3b52;
+  --bg: #1e1e2e;       /* base, same as QWidget background */
+  --bg-deep: #181825;  /* mantle, used for header/footer/code */
+  --panel: #313244;    /* surface0, same as the app's buttons/panels */
+  --border: #45475a;   /* surface1, same as QGroupBox borders */
   --text: #cdd6f4;
   --muted: #a6adc8;
-  --accent: #cba6f7;
-  --accent-2: #89b4fa;
+  --accent: #b4befe;   /* lavender: the app's single primary action colour */
+  --link: #89b4fa;
   --green: #a6e3a1;
   --red: #f38ba8;
 }
 
 * { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; }
+html {
+  -webkit-text-size-adjust: 100%;
+  background: var(--bg);
+  color-scheme: dark;
+}
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, sans-serif;
+  font-family: "Segoe UI", "Ubuntu", "Noto Sans", Arial, system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
 }
 
 .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
 
-a { color: var(--accent-2); text-decoration: none; }
+a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 header.nav {
@@ -47,7 +57,6 @@ header.nav .wrap {
   color: var(--text);
   letter-spacing: 0.02em;
 }
-.brand span { color: var(--accent); }
 header.nav nav { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.92rem; }
 header.nav nav a { color: var(--muted); }
 header.nav nav a:hover { color: var(--text); text-decoration: none; }
@@ -71,7 +80,7 @@ h3 { font-size: 1.05rem; margin: 26px 0 6px; }
 .btn {
   display: inline-block;
   padding: 11px 18px;
-  border-radius: 8px;
+  border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
@@ -80,7 +89,7 @@ h3 { font-size: 1.05rem; margin: 26px 0 6px; }
 }
 .btn:hover { border-color: var(--accent); text-decoration: none; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #1e1e2e; }
-.btn-primary:hover { background: #d7b7fb; border-color: #d7b7fb; }
+.btn-primary:hover { background: #c7d0fe; border-color: #c7d0fe; }
 .hint { color: var(--muted); font-size: 0.85rem; margin: 0 0 30px; }
 
 figure { margin: 26px 0; }
@@ -89,7 +98,7 @@ figure img {
   width: 100%;
   height: auto;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--bg-deep);
 }
 figcaption { color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
@@ -106,7 +115,7 @@ td.no { color: var(--red); }
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   background: var(--panel);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 16px 18px;
   margin: 22px 0;
 }
@@ -121,11 +130,17 @@ code, pre {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.9em;
 }
-code { background: var(--bg-deep); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+code {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text);
+}
 pre {
   background: var(--bg-deep);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 14px 16px;
   overflow-x: auto;
 }
@@ -136,7 +151,7 @@ pre code { background: none; border: 0; padding: 0; }
   display: block;
   border: 1px solid var(--border);
   background: var(--panel);
-  border-radius: 10px;
+  border-radius: 6px;
   padding: 16px 18px;
   color: var(--text);
 }
