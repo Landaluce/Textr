@@ -45,7 +45,7 @@ evdev>=1.6; sys_platform == 'linux'
 
 ## Installation
 
-**Easiest:** download a ready-to-run binary from the [Releases page](https://github.com/Landaluce/Textr/releases) (v0.2.0 and later) — no Python needed:
+**Easiest:** download a ready-to-run binary from the [Releases page](https://github.com/Landaluce/Textr/releases) — no Python needed:
 
 | OS | File | Run it |
 |----|------|--------|

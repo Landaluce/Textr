@@ -107,7 +107,8 @@ jobs:
       - name: Attach to GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          # The tag (v0.2.0) becomes the release; files attached below it.
+          # The tag becomes the release; files attached below it.
+          generate_release_notes: true
           files: |
             binaries/textr-linux/textr
             binaries/textr-windows/Textr.exe
