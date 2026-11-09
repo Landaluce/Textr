@@ -32,6 +32,12 @@ import sys
 DESKTOP_FILE_NAME = "textr.desktop"
 ICON_FILE_NAME = "textr.png"
 ICON_THEME_NAME = "textr"
+# Window identity Textr advertises: the X11 WM_CLASS instance (and Wayland
+# app_id). main.py hands this to Qt and the entry below claims it via
+# StartupWMClass, so the dock resolves Textr's window to textr.desktop and
+# never to another launcher that happens to match a generic class like
+# "main.py" (which is what a bare `python main.py` run produces).
+WINDOW_CLASS = "textr"
 
 
 def _home():
@@ -103,6 +109,10 @@ def _desktop_contents(exec_command, working_dir=None):
         lines.append(f"Path={working_dir}")
     lines += [
         f"Icon={ICON_THEME_NAME}",
+        # Pin the entry to the window's WM_CLASS (main.py passes Qt the
+        # same value as -name) so the shell never picks another launcher
+        # whose StartupWMClass happens to match a generic class.
+        f"StartupWMClass={WINDOW_CLASS}",
         "Terminal=false",
         "Categories=Utility;",
         "Keywords=text expansion;snippets;",

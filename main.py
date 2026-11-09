@@ -4,14 +4,30 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 from app_icon import apply_app_icon
 from daemon import Daemon
-from shortcut import install_app_shortcut
+from shortcut import WINDOW_CLASS, install_app_shortcut
 from ui import TexterUI
 from stylesheet import STYLESHEETS, resolved_theme
 
 
+def _qt_argv(argv):
+    """argv for QApplication with Textr's own window class on X11.
+
+    Qt takes the WM_CLASS instance from argv[0], which for a source run is
+    "main.py". A launcher that declares StartupWMClass=main.py (other
+    Python Qt apps on this machine do) then wins the dock icon, so the
+    window passed -name with the class shortcut.py writes into the entry.
+    """
+    argv = list(argv)
+    if sys.platform.startswith("linux"):
+        argv[1:1] = ["-name", WINDOW_CLASS]
+    return argv
+
+
 def main():
-    app = QApplication(sys.argv)
+    app = QApplication(_qt_argv(sys.argv))
     app.setApplicationName("Textr")
+    # Wayland app_id / desktop-file association; same identity as the entry.
+    app.setDesktopFileName(WINDOW_CLASS)
     # No window icon was ever set, so the dock showed a generic gear.
     # The embedded logo is applied to the application and to the main
     # window so the dock, taskbar and Alt-Tab show the Textr mark.
