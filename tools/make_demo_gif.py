@@ -404,7 +404,7 @@ PACK_SCENARIOS = {
     },
     # --- writing packs render in the app they are written in ------------------
     "workflow": {
-        "title": "Landaluce/Textr · New pull request",
+        "title": "northgate/notes · New pull request",
         "syntax": False,
         "chrome": "pr",
         "header": [("Title", "Fix duplicate trigger firing on prefix disambiguation")],
@@ -686,9 +686,9 @@ PACK_SCENARIOS = {
         "syntax": False,
         "start": ["Hi Marcus,", ""],
         "snippets": {
-            ":sig": _snip("Alex Rivera\nOperations — Landaluce Ltd\n+44 7700 900123"),
+            ":sig": _snip("Alex Rivera\nOperations — Northgate Systems\n+44 7700 900123"),
             ":addr": _snip(
-                "Landaluce Ltd\nUnit 4, 22 Alder Lane\nManchester M4 5JX\nUnited Kingdom"
+                "Northgate Systems\nUnit 4, 22 Alder Lane\nManchester M4 5JX\nUnited Kingdom"
             ),
         },
         "steps": [
