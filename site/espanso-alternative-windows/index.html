@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Espanso alternative for Windows — a GUI, not a YAML file | Textr</title>
+<meta name="description" content="Download Textr.exe and manage snippets in a window instead of a match file. Windows 10+, no Python, no terminal. Imports Espanso match files if you already have them, and skips triggers you've edited.">
+<meta name="theme-color" content="#1e1e2e">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Espanso alternative for Windows — a GUI, not a YAML file">
+<meta property="og:description" content="A prebuilt .exe, a snippet table and a tray icon. For everyone who opened a match file and closed the editor.">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="../">Textr<span>.</span></a>
+    <nav>
+      <a href="../espanso-gui/">Espanso GUI</a>
+      <a href="../text-expander-wayland/">Wayland</a>
+      <a href="../espanso-alternative-windows/" aria-current="page">Windows</a>
+      <a href="../textexpander-alternative/">vs TextExpander</a>
+      <a href="../text-expander-linux/">Linux</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <h1>An Espanso alternative for Windows that isn't a <em>YAML file</em></h1>
+  <p class="lede">You installed Espanso, opened a match file, and closed the editor. Textr is a normal Windows app: add a snippet in a window, type its trigger in any program, get the text. No Python, no terminal, no config syntax to learn.</p>
+
+  <div class="buttons">
+    <a class="btn btn-primary" href="https://github.com/Landaluce/Textr/releases/latest">Download Textr.exe (Windows)</a>
+    <a class="btn" href="https://github.com/Landaluce/Textr/releases/latest">Download for Linux</a>
+    <a class="btn" href="https://alvaroluce.gumroad.com/l/textr">Get the $15 bundle</a>
+  </div>
+  <p class="hint">Textr.exe needs no installer and no admin rights. Windows 10 or later.</p>
+
+  <figure>
+    <img src="../assets/demo.gif" width="880" height="420" alt="Textr's snippet manager: searching snippets and expanding a trigger into a Python template">
+    <figcaption>The manager window. Close it to the tray and triggers keep working in every application.</figcaption>
+  </figure>
+
+  <h2>What the window actually gives you</h2>
+  <ul>
+    <li><strong>A searchable table</strong> of every snippet — grouped by folder, type or tag, with a second grouping level if you want it.</li>
+    <li><strong>An editor with a live preview</strong>, so you see the expansion before you save it.</li>
+    <li><strong>Enable/disable per snippet</strong> instead of commenting lines out and remembering why.</li>
+    <li><strong>Placeholders</strong> — <code>{name}</code>, <code>{date+7}</code>, <code>{clipboard}</code>, <code>{cursor}</code>, and your own custom values like <code>{company}</code>.</li>
+    <li><strong>Four snippet types</strong>: plain text, per-language code templates, actions, and shell commands whose output is inserted.</li>
+    <li><strong>Backups and a trash can</strong> — the last 10 versions of your snippet file, and deleted snippets restorable instead of gone.</li>
+  </ul>
+
+  <h2>Already have Espanso matches?</h2>
+  <p>They still work: <strong>Library → Import Espanso file…</strong> reads your <code>.yml</code>/<code>.yaml</code> match file and turns each match into a snippet. Triggers already in your library are skipped rather than overwritten, so a second import can't undo your edits.</p>
+
+  <h2>Side by side on Windows</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th> </th><th>Espanso</th><th>Textr</th></tr></thead>
+    <tbody>
+      <tr><th>Installing</th><td>Installer or package manager</td><td class="yes">Double-click <code>Textr.exe</code></td></tr>
+      <tr><th>Adding a snippet</th><td>Edit YAML, reload</td><td class="yes">Ctrl+N, type, save</td></tr>
+      <tr><th>Seeing what you have</th><td>Read the file</td><td class="yes">Table, search, tags</td></tr>
+      <tr><th>Disabling one snippet</th><td>Comment it out</td><td class="yes">Uncheck Enabled</td></tr>
+      <tr><th>Undo a mistake</th><td>Your editor's undo</td><td class="yes">In-app undo + version history</td></tr>
+      <tr><th>Price</th><td>Free, open source</td><td>Free from source · $15 bundle</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <h3>What Textr doesn't do</h3>
+    <ul>
+      <li><strong>The .exe is not code-signed.</strong> SmartScreen shows "unrecognized app" on first launch — <em>More info → Run anyway</em>. That's a signing certificate we don't buy, not a warning about behaviour.</li>
+      <li><strong>No cloud sync or team libraries.</strong> Snippets live in <code>%APPDATA%\Textr</code> as JSON you can back up yourself.</li>
+      <li><strong>Espanso import is partial</strong>: forms, scripts and hub packages don't transfer, and <code>{{variables}}</code> arrive as literal text.</li>
+      <li><strong>No mobile or browser app</strong> — this is a desktop expander only.</li>
+    </ul>
+  </div>
+
+  <div class="cards">
+    <a class="card" href="../espanso-gui/"><strong>Importing your match file</strong><span>What comes across, what doesn't</span></a>
+    <a class="card" href="../textexpander-alternative/"><strong>$15 once vs a subscription</strong><span>The price comparison, plainly</span></a>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Textr — text expansion for Linux, Windows and macOS. MIT licensed.</span>
+    <a href="https://github.com/Landaluce/Textr">Source</a>
+    <a href="https://github.com/Landaluce/Textr/releases/latest">Releases</a>
+    <a href="https://alvaroluce.gumroad.com/l/textr">$15 bundle</a>
+  </div>
+</footer>
+</body>
+</html>

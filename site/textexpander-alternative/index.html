@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TextExpander alternative — $15 once, no subscription | Textr</title>
+<meta name="description" content="TextExpander is a per-user subscription with cloud sync. Textr is $15 one-time, stores snippets in plain JSON files on your disk, and runs on Linux, Windows and macOS.">
+<meta name="theme-color" content="#1e1e2e">
+<meta property="og:type" content="website">
+<meta property="og:title" content="TextExpander alternative — $15 once, no subscription">
+<meta property="og:description" content="A one-time purchase, local snippet files, and no seat counting. Here's exactly what you trade away.">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="../">Textr<span>.</span></a>
+    <nav>
+      <a href="../espanso-gui/">Espanso GUI</a>
+      <a href="../text-expander-wayland/">Wayland</a>
+      <a href="../espanso-alternative-windows/">Windows</a>
+      <a href="../textexpander-alternative/" aria-current="page">vs TextExpander</a>
+      <a href="../text-expander-linux/">Linux</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <h1>A TextExpander alternative you buy <em>once</em></h1>
+  <p class="lede">TextExpander bills per user, per year, and keeps your snippets in its cloud. Textr is $15 one time, lives in your tray, and stores everything in plain JSON files you can back up, diff and read.</p>
+
+  <div class="buttons">
+    <a class="btn btn-primary" href="https://alvaroluce.gumroad.com/l/textr">Get the $15 bundle</a>
+    <a class="btn" href="https://github.com/Landaluce/Textr/releases/latest">Download for Linux</a>
+    <a class="btn" href="https://github.com/Landaluce/Textr/releases/latest">Download Textr.exe (Windows)</a>
+  </div>
+  <p class="hint">$15 covers all three binaries (Linux, Windows, macOS) plus a starter pack. Or build it free from source — it's MIT licensed.</p>
+
+  <figure>
+    <img src="../assets/demo.gif" width="880" height="420" alt="Searching a snippet library and expanding a trigger into code">
+    <figcaption>Snippets expand in any app; the manager stays out of the way in the tray.</figcaption>
+  </figure>
+
+  <h2>The difference, plainly</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th> </th><th>TextExpander</th><th>Textr</th></tr></thead>
+    <tbody>
+      <tr><th>Pricing model</th><td>Subscription, per user, billed yearly</td><td class="yes">$15 once (or free from source)</td></tr>
+      <tr><th>Where snippets live</th><td>Their cloud account</td><td class="yes">Local JSON files on your machine</td></tr>
+      <tr><th>Works offline</th><td>Depends on sync state</td><td class="yes">Always — there is no server</td></tr>
+      <tr><th>Platforms</th><td>macOS, Windows, iOS, web</td><td>Linux, Windows 10+, macOS 11+</td></tr>
+      <tr><th>Team sharing</th><td class="yes">Built in</td><td class="no">Not supported</td></tr>
+      <tr><th>Open source</th><td class="no">No</td><td class="yes">MIT, auditable</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>No competitor price is quoted here on purpose — subscription pricing changes. Check their site for the current number and compare it with a single $15 payment.</p>
+
+  <h2>What you get for the $15</h2>
+  <ul>
+    <li><strong>Four snippet types</strong>: static text, per-language code templates, actions, and shell commands whose stdout is inserted.</li>
+    <li><strong>Real placeholders</strong>: <code>{date+7}</code>, <code>{time}</code>, <code>{clipboard}</code>, <code>{cursor}</code>, <code>{choice:Formal|Friendly}</code>, <code>{counter}</code>, <code>{random:heads|tails}</code>, and custom values like <code>{company}</code>.</li>
+    <li><strong>Prefix-aware triggers</strong>: with <code>:d</code> and <code>:dt</code> both defined, expansion waits one keystroke so the longer trigger wins.</li>
+    <li><strong>Portable data</strong>: export a set of snippets as a pack file, import it elsewhere, and your history and usage counts travel with the JSON.</li>
+    <li><strong>Local usage stats</strong> — expansions today, last 30 days, and a daily chart. No account required.</li>
+  </ul>
+
+  <div class="note">
+    <h3>What Textr doesn't do</h3>
+    <ul>
+      <li><strong>No team sharing or admin console.</strong> If you need to push a shared snippet library to a dozen people, a subscription product is the right tool.</li>
+      <li><strong>No mobile apps.</strong> Desktop only — there's no iOS counterpart to type from your phone.</li>
+      <li><strong>No cloud sync between machines.</strong> Copy the JSON files, or keep them in a synced folder yourself.</li>
+      <li><strong>Binaries are unsigned</strong>, so macOS Gatekeeper and Windows SmartScreen ask once before the first launch.</li>
+    </ul>
+  </div>
+
+  <div class="cards">
+    <a class="card" href="../espanso-gui/"><strong>Coming from Espanso?</strong><span>Import your match file in one click</span></a>
+    <a class="card" href="../text-expander-linux/"><strong>On Linux?</strong><span>X11 and Wayland, with per-distro install steps</span></a>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Textr — text expansion for Linux, Windows and macOS. MIT licensed.</span>
+    <a href="https://github.com/Landaluce/Textr">Source</a>
+    <a href="https://github.com/Landaluce/Textr/releases/latest">Releases</a>
+    <a href="https://alvaroluce.gumroad.com/l/textr">$15 bundle</a>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,0 +1,51 @@
+# Publishes the static site in site/ to GitHub Pages.
+#
+# URLs (project site): https://landaluce.github.io/Textr/
+#   /espanso-gui/  /text-expander-wayland/  /espanso-alternative-windows/
+#   /textexpander-alternative/  /text-expander-linux/
+#
+# Pages must be set to "GitHub Actions" as its source; configure-pages does that
+# on first run when the token has permission (enablement below).
+
+name: pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Text expander for Wayland — evdev capture, ydotool output | Textr</title>
+<meta name="description" content="Most text expanders only see XWayland apps. Textr reads keyboard events from /dev/input with evdev and types through ydotool, so triggers fire in native Wayland windows. Includes a keycode diagnostic for layout problems.">
+<meta name="theme-color" content="#1e1e2e">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Text expander for Wayland — evdev capture, ydotool output">
+<meta property="og:description" content="Why Wayland breaks most expanders, how Textr works around it, and how textr-diag tells you what is wrong in minutes.">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="../">Textr<span>.</span></a>
+    <nav>
+      <a href="../espanso-gui/">Espanso GUI</a>
+      <a href="../text-expander-wayland/" aria-current="page">Wayland</a>
+      <a href="../espanso-alternative-windows/">Windows</a>
+      <a href="../textexpander-alternative/">vs TextExpander</a>
+      <a href="../text-expander-linux/">Linux</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <h1>Text expansion that works in <em>native Wayland</em> apps</h1>
+  <p class="lede">Most expanders hook X11, so on a Wayland session they only see XWayland windows and fire nothing in your actual apps. Textr reads keyboard events straight from <code>/dev/input</code> with evdev and types the expansion through <code>ydotool</code> — while also keeping the X11 path working.</p>
+
+  <div class="buttons">
+    <a class="btn btn-primary" href="https://github.com/Landaluce/Textr/releases/latest">Download for Linux</a>
+    <a class="btn" href="https://github.com/Landaluce/Textr/releases/latest">Download Textr.exe (Windows)</a>
+    <a class="btn" href="https://alvaroluce.gumroad.com/l/textr">Get the $15 bundle</a>
+  </div>
+  <p class="hint">Free and MIT-licensed from source. The bundle is one purchase: all three binaries plus a starter pack of snippets.</p>
+
+  <figure>
+    <img src="../assets/demo.gif" width="880" height="420" alt="A trigger expanding into a function template in an editor, with Textr's snippet manager open">
+    <figcaption>Same daemon, whichever session type you log into: triggers are captured, matched and typed back into the focused window.</figcaption>
+  </figure>
+
+  <h2>The two halves of the problem</h2>
+  <h3>Capture: reading keys without X11</h3>
+  <p>Wayland deliberately doesn't let apps observe keystrokes. X11 tools like pynput therefore only ever see XWayland clients. Textr's Wayland backend opens the raw event devices instead:</p>
+  <pre><code>sudo usermod -aG input "$USER"   # then log out and back in
+# /dev/input/event* now readable; Textr's evdev listener attaches to them</code></pre>
+  <p>If evdev isn't available (no <code>python-evdev</code>, or no permission on the devices), Textr falls back to pynput and prints why — you get XWayland-only expansion rather than silence.</p>
+
+  <h3>Output: typing without a clipboard</h3>
+  <p>On Wayland, unmapped paste shortcuts aren't reliable, so expansions are <em>typed</em> with <code>ydotool</code>, which speaks the kernel's uinput layer. Start the daemon once:</p>
+  <pre><code>sudo systemctl enable --now ydotool.service
+# or: ydotoold &amp;</code></pre>
+  <p>You can also choose <strong>Human Typing</strong> mode on X11, which types character by character through the same mechanism instead of pasting.</p>
+
+  <h2>Keyboard layouts</h2>
+  <p>evdev reports keycodes, not characters — <code>2</code> is just a position on the board. Textr maps keycodes through a layout table before matching triggers, and AltGr characters are included.</p>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Layout</th><th>Setting</th><th>Example: <code>@</code></th></tr></thead>
+    <tbody>
+      <tr><th>US</th><td><code>"layout": "us"</code></td><td><code>Shift</code> + <code>2</code></td></tr>
+      <tr><th>UK</th><td><code>"layout": "uk"</code></td><td><code>Shift</code> + <code>'</code></td></tr>
+      <tr><th>German</th><td><code>"layout": "de"</code></td><td><code>AltGr</code> + <code>Q</code></td></tr>
+      <tr><th>French</th><td><code>"layout": "fr"</code></td><td><code>AltGr</code> + <code>0</code></td></tr>
+      <tr><th>Spanish</th><td><code>"layout": "es"</code></td><td><code>AltGr</code> + <code>2</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Set it in <strong>Settings → Keyboard layout</strong>. Tables are best-effort for the common variants; <code>LAYOUTS</code> in <code>input_wayland.py</code> is a plain dict if yours differs.</p>
+
+  <h2>When it doesn't fire, diagnose instead of guessing</h2>
+  <p><code>textr-diag</code> (or <code>python3 -m diag</code> from a checkout) reports the session type, every input device with its permissions, whether Python packages are present, and whether <code>ydotool</code> is available and running:</p>
+  <pre><code>textr-diag                 # environment report
+textr-diag --listen 5      # press keys for 5s, see keycode -> character
+textr-diag --test-type     # type a test string through ydotool</code></pre>
+  <p>The <code>--listen</code> output is the fastest way to spot a wrong layout or a key that never arrives: you see the exact characters Textr will match against your triggers.</p>
+
+  <h2>X11 vs Wayland, in one table</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th> </th><th>X11 session</th><th>Wayland session</th></tr></thead>
+    <tbody>
+      <tr><th>Key capture</th><td>pynput listener</td><td class="yes">evdev, fallback to XWayland only</td></tr>
+      <tr><th>Typing the expansion</th><td>Clipboard paste (<code>Ctrl+Shift+V</code>) or typed</td><td>Typed via <code>ydotool</code></td></tr>
+      <tr><th>Extra packages</th><td>None (optional <code>xdotool</code>)</td><td><code>python-evdev</code>, <code>ydotool</code> daemon</td></tr>
+      <tr><th>Permissions</th><td>None</td><td>Read access to <code>/dev/input</code> (<code>input</code> group)</td></tr>
+      <tr><th>Quick-insert picker</th><td class="yes"><code>Ctrl+Alt+Space</code></td><td>Manager button / tray menu</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <h3>What Textr doesn't do</h3>
+    <ul>
+      <li><strong>Five layouts only</strong> (us, uk, de, fr, es) — an exotic layout or a remapped key needs a new entry in the table.</li>
+      <li><strong>The global quick-insert hotkey is X11-only</strong>; on Wayland you insert from the manager window or tray.</li>
+      <li><strong>Wayland needs setup you can't skip</strong>: <code>ydotool</code> running, plus <code>input</code> group membership for capture.</li>
+      <li><strong>No sandboxed builds</strong> — a Flatpak or Snap would not get raw device access, so run the binary or the source install.</li>
+    </ul>
+  </div>
+
+  <p><a href="../text-expander-linux/">Per-distro install steps for Fedora, Ubuntu and Arch →</a></p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Textr — text expansion for Linux, Windows and macOS. MIT licensed.</span>
+    <a href="https://github.com/Landaluce/Textr">Source</a>
+    <a href="https://github.com/Landaluce/Textr/releases/latest">Releases</a>
+    <a href="https://alvaroluce.gumroad.com/l/textr">$15 bundle</a>
+  </div>
+</footer>
+</body>
+</html>

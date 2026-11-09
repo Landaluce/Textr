@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Text expander for Linux — X11 and Wayland, Fedora/Ubuntu/Arch | Textr</title>
+<meta name="description" content="Textr runs on both X11 and Wayland sessions: evdev capture and ydotool output on Wayland, pynput and paste on X11. Per-distro install steps for Fedora, Ubuntu and Arch, plus textr-diag for troubleshooting.">
+<meta name="theme-color" content="#1e1e2e">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Text expander for Linux — X11 and Wayland, Fedora/Ubuntu/Arch">
+<meta property="og:description" content="One snippet library for both session types, with the install steps and the diagnostics that actually tell you what's broken.">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="../">Textr<span>.</span></a>
+    <nav>
+      <a href="../espanso-gui/">Espanso GUI</a>
+      <a href="../text-expander-wayland/">Wayland</a>
+      <a href="../espanso-alternative-windows/">Windows</a>
+      <a href="../textexpander-alternative/">vs TextExpander</a>
+      <a href="../text-expander-linux/" aria-current="page">Linux</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <h1>A text expander for Linux, on <em>X11 or Wayland</em></h1>
+  <p class="lede">The same snippet library on either session type. Textr picks the right input and typing backend for your desktop, and tells you exactly what's missing when something doesn't fire.</p>
+
+  <div class="buttons">
+    <a class="btn btn-primary" href="https://github.com/Landaluce/Textr/releases/latest">Download for Linux</a>
+    <a class="btn" href="https://github.com/Landaluce/Textr/releases/latest">Download Textr.exe (Windows)</a>
+    <a class="btn" href="https://alvaroluce.gumroad.com/l/textr">Get the $15 bundle</a>
+  </div>
+  <p class="hint">The Linux binary is a single executable — <code>chmod +x textr &amp;&amp; ./textr</code>. Or run from source below.</p>
+
+  <figure>
+    <img src="../assets/demo.gif" width="880" height="420" alt="Textr's snippet manager with a trigger expanding into a code template">
+    <figcaption>One window, one JSON snippet file, both session types.</figcaption>
+  </figure>
+
+  <h2>First: which session are you on?</h2>
+  <pre><code>echo "$XDG_SESSION_TYPE"   # x11 or wayland
+echo "$WAYLAND_DISPLAY"    # set on Wayland, empty on X11</code></pre>
+
+  <h2>X11 vs Wayland</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th> </th><th>X11</th><th>Wayland</th></tr></thead>
+    <tbody>
+      <tr><th>Key capture</th><td>pynput</td><td class="yes">evdev, straight from <code>/dev/input</code></td></tr>
+      <tr><th>Inserting text</th><td>Clipboard paste</td><td>Typed via <code>ydotool</code></td></tr>
+      <tr><th>Permissions</th><td class="yes">None</td><td><code>input</code> group membership</td></tr>
+      <tr><th>Extra packages</th><td>Optional <code>xdotool</code> for quick insert</td><td><code>python-evdev</code>, <code>ydotool</code></td></tr>
+      <tr><th>Quick insert hotkey</th><td class="yes"><code>Ctrl+Alt+Space</code></td><td>Manager button / tray</td></tr>
+      <tr><th>Pause / show window</th><td class="yes"><code>Ctrl+Shift+P</code>, <code>Ctrl+Shift+Space</code></td><td>Same, via evdev</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Install</h2>
+  <h3>Prebuilt binary (no Python needed)</h3>
+  <pre><code>wget https://github.com/Landaluce/Textr/releases/latest/download/textr
+chmod +x textr
+./textr</code></pre>
+
+  <h3>From source</h3>
+  <pre><code>git clone https://github.com/Landaluce/Textr.git
+cd Textr
+python3 -m pip install -r requirements.txt
+bash run.sh              # or: python3 main.py
+# install the `textr` and `textr-diag` commands:
+python3 -m pip install .</code></pre>
+
+  <h3>The tools each desktop needs</h3>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Distro</th><th>Base packages</th><th>Wayland extras</th></tr></thead>
+    <tbody>
+      <tr>
+        <th>Fedora</th>
+        <td><code>sudo dnf install python3-pip</code></td>
+        <td><code>sudo dnf install ydotool</code><br><code>sudo dnf install xdotool</code></td>
+      </tr>
+      <tr>
+        <th>Ubuntu / Debian</th>
+        <td><code>sudo apt install python3-pip python3-venv</code></td>
+        <td><code>sudo apt install ydotool</code><br><code>sudo apt install xdotool</code></td>
+      </tr>
+      <tr>
+        <th>Arch</th>
+        <td><code>sudo pacman -S python-pip</code></td>
+        <td><code>sudo pacman -S ydotool</code><br><code>sudo pacman -S xdotool</code></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Package names move between releases — if <code>ydotool</code> isn't in your repositories yet, build it from <a href="https://github.com/ReimuNotMoe/ydotool">github.com/ReimuNotMoe/ydotool</a>. Only Wayland sessions need it; <code>xdotool</code> is optional and only improves window restore for quick insert on X11.</p>
+
+  <h3>Wayland: one-time permissions</h3>
+  <pre><code>sudo usermod -aG input "$USER"     # then log out and back in
+sudo systemctl enable --now ydotool.service</code></pre>
+
+  <h2>Where your data lives</h2>
+  <p>Everything is plain JSON under <code>$XDG_CONFIG_HOME/textr/</code> (default <code>~/.config/textr/</code>):</p>
+  <ul>
+    <li><code>snippets.json</code> — the snippet library</li>
+    <li><code>config.json</code> — profile, layout, paste shortcut, date formats</li>
+    <li><code>usage_log.json</code> — per-day expansion counts, newest 90 days</li>
+  </ul>
+  <p>Back them up, put them in a git repo, or copy them to another machine — there's no server involved.</p>
+
+  <h2>When triggers don't fire</h2>
+  <pre><code>textr-diag                 # session, devices, permissions, ydotool
+textr-diag --listen 5      # see keycode -> character under your layout
+textr-diag --test-type     # check typing output end to end</code></pre>
+
+  <div class="note">
+    <h3>What Textr doesn't do</h3>
+    <ul>
+      <li><strong>No Flatpak or Snap build.</strong> Sandboxing blocks raw keyboard access, which is the whole mechanism — use the binary or a source install.</li>
+      <li><strong>Five keyboard layouts</strong> (us, uk, de, fr, es) for Wayland keycode mapping; others need a table entry.</li>
+      <li><strong>The quick-insert hotkey is X11-only</strong>; on Wayland you open the picker from the manager.</li>
+      <li><strong>No auto-update</strong> — download the next release, or <code>git pull</code> if you run from source.</li>
+    </ul>
+  </div>
+
+  <p><a href="../text-expander-wayland/">Deeper detail on the Wayland backend →</a></p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Textr — text expansion for Linux, Windows and macOS. MIT licensed.</span>
+    <a href="https://github.com/Landaluce/Textr">Source</a>
+    <a href="https://github.com/Landaluce/Textr/releases/latest">Releases</a>
+    <a href="https://alvaroluce.gumroad.com/l/textr">$15 bundle</a>
+  </div>
+</footer>
+</body>
+</html>

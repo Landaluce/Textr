@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Espanso with a GUI — import your match file in one click | Textr</title>
+<meta name="description" content="Textr is a text expander with a real window. Import your Espanso match file in one click, edit every snippet in a table instead of YAML, and keep typing the triggers you already know.">
+<meta name="theme-color" content="#1e1e2e">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Espanso with a GUI — import your match file in one click">
+<meta property="og:description" content="A window, a table, and a one-click import for your existing Espanso matches. Linux, Windows and macOS. $15 once, or free from source.">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="../">Textr<span>.</span></a>
+    <nav>
+      <a href="../espanso-gui/" aria-current="page">Espanso GUI</a>
+      <a href="../text-expander-wayland/">Wayland</a>
+      <a href="../espanso-alternative-windows/">Windows</a>
+      <a href="../textexpander-alternative/">vs TextExpander</a>
+      <a href="../text-expander-linux/">Linux</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <h1>Espanso with a <em>GUI</em></h1>
+  <p class="lede">Espanso is a match file and a terminal. Textr is the same idea with a window: import that match file in one click, then edit every snippet in a table instead of YAML — and keep typing the triggers you already know.</p>
+
+  <div class="buttons">
+    <a class="btn btn-primary" href="https://github.com/Landaluce/Textr/releases/latest">Download for Linux</a>
+    <a class="btn" href="https://github.com/Landaluce/Textr/releases/latest">Download Textr.exe (Windows)</a>
+    <a class="btn" href="https://alvaroluce.gumroad.com/l/textr">Get the $15 bundle</a>
+  </div>
+  <p class="hint">Free and MIT-licensed from source. The bundle is one purchase: all three binaries plus a starter pack of snippets.</p>
+
+  <figure>
+    <img src="../assets/demo.gif" width="880" height="420" alt="Textr's snippet manager with a trigger expanding into a Python function template">
+    <figcaption>The manager window: snippets in a searchable table, grouped by category and tag. Triggers expand in any app while the window is hidden in the tray.</figcaption>
+  </figure>
+
+  <h2>Bring your existing matches with you</h2>
+  <p>Your Espanso library is a YAML match file. Textr reads it directly — no conversion script, no copying fields by hand.</p>
+  <ol>
+    <li>Open <strong>Library → Import Espanso file…</strong></li>
+    <li>Pick your <code>match/base.yml</code> (or any <code>.yml</code>/<code>.yaml</code> match file)</li>
+    <li>Every match becomes a snippet tagged <code>espanso</code>, ready to edit</li>
+  </ol>
+  <p>Triggers you already have are <strong>skipped, never overwritten</strong>, so importing twice or merging two files can't destroy your edits. Plain, quoted, literal-block and folded YAML scalars are all understood.</p>
+
+  <h2>Side by side</h2>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th> </th><th>Espanso</th><th>Textr</th></tr>
+    </thead>
+    <tbody>
+      <tr><th>Editing snippets</th><td>YAML in a text editor</td><td class="yes">Table + dialog, search, tags, enable/disable</td></tr>
+      <tr><th>Import an Espanso file</th><td>—</td><td class="yes">One menu action</td></tr>
+      <tr><th>Prefix conflicts (<code>:d</code> vs <code>:dt</code>)</th><td>Own matching rules</td><td class="yes">Waits for the next key, longer trigger wins</td></tr>
+      <tr><th>Placeholders</th><td><code>{{name}}</code> style</td><td class="yes"><code>{name}</code>, dates, choices, counters, <code>{cursor}</code></td></tr>
+      <tr><th>Price</th><td>Free, open source</td><td>Free from source · $15 bundle</td></tr>
+      <tr><th>Platforms</th><td>Linux, Windows, macOS</td><td>Linux, Windows 10+, macOS 11+</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <h3>What Textr doesn't do</h3>
+    <ul>
+      <li><strong>The import is one-way and partial.</strong> Espanso forms, scripts and hub packages don't come across, and Espanso's <code>{{variables}}</code> are imported as literal text — you edit them into Textr placeholders afterwards.</li>
+      <li><strong>No cloud sync or team sharing.</strong> Snippets are plain JSON files on your disk, which is the point.</li>
+      <li><strong>The binaries aren't code-signed or notarized.</strong> Windows SmartScreen and macOS Gatekeeper warn on first launch; both have a documented one-time bypass.</li>
+      <li><strong>On Wayland</strong>, typing goes through <code>ydotool</code> and capture needs read access to your input devices — details on the <a href="../text-expander-wayland/">Wayland page</a>.</li>
+    </ul>
+  </div>
+
+  <h2>Also worth a look</h2>
+  <div class="cards">
+    <a class="card" href="../text-expander-wayland/"><strong>Native Wayland support</strong><span>evdev capture, ydotool output, five keyboard layouts</span></a>
+    <a class="card" href="../espanso-alternative-windows/"><strong>Windows without the YAML</strong><span>A prebuilt .exe and a window instead of a config file</span></a>
+    <a class="card" href="../textexpander-alternative/"><strong>One-time price</strong><span>How it compares to a TextExpander subscription</span></a>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Textr — text expansion for Linux, Windows and macOS. MIT licensed.</span>
+    <a href="https://github.com/Landaluce/Textr">Source</a>
+    <a href="https://github.com/Landaluce/Textr/releases/latest">Releases</a>
+    <a href="https://alvaroluce.gumroad.com/l/textr">$15 bundle</a>
+  </div>
+</footer>
+</body>
+</html>
